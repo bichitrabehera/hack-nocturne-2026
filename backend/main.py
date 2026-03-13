@@ -1,9 +1,8 @@
 """
 main.py
-Sole responsibility: define the 3 API routes and connect ai_analyzer + web3_service.
+Backend API routes that connect AI analysis, blockchain reads/writes, and local URL lookup storage.
 """
 
-import os
 import logging
 from contextlib import asynccontextmanager
 
@@ -13,6 +12,7 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from ai_analyzer import analyze_scam, startup as ai_startup, shutdown as ai_shutdown
+from db_service import enrich_report, enrich_reports, hash_url, init_db, save_url_hash
 from web3_services import (
     submit_report, get_all_reports, get_report, get_report_by_hash, 
     check_hash, vote_on_report, get_report_count
@@ -20,6 +20,7 @@ from web3_services import (
 
 load_dotenv()
 logger = logging.getLogger(__name__)
+AUTO_REPORT_URL_STATUSES = {"high_risk", "scam"}
 
 
 # ---------------------------------------------------------------------------
@@ -28,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    init_db()
     logger.info("🚀 Starting up — loading AI model...")
     await ai_startup()        # loads DistilBERT (or falls back to rules)
     logger.info("✅ AI model ready")
@@ -65,6 +67,43 @@ class VoteRequest(BaseModel):
     reportId: int
 
 
+def _auto_report_scan_result(result: dict, url: str) -> dict:
+    normalized_url = url.strip()
+    if not normalized_url:
+        return {"attempted": False, "submitted": False, "alreadyReported": False, "txHash": None, "textHash": None}
+
+    raw = result.get("_raw", {})
+    url_analysis = raw.get("url_analysis", {})
+    if url_analysis.get("status") not in AUTO_REPORT_URL_STATUSES:
+        return {"attempted": False, "submitted": False, "alreadyReported": False, "txHash": None, "textHash": None}
+
+    text_hash = hash_url(normalized_url)
+    existing = check_hash(text_hash)
+    if existing.get("exists"):
+        return {
+            "attempted": True,
+            "submitted": False,
+            "alreadyReported": True,
+            "txHash": None,
+            "textHash": text_hash,
+        }
+
+    saved_hash = save_url_hash(normalized_url)
+    tx_hash = submit_report(
+        text=normalized_url,
+        category=result["category"],
+        risk_score=result["riskScore"],
+        actual_reporter=None,
+    )
+    return {
+        "attempted": True,
+        "submitted": True,
+        "alreadyReported": False,
+        "txHash": tx_hash,
+        "textHash": saved_hash,
+    }
+
+
 # ---------------------------------------------------------------------------
 # Routes
 # ---------------------------------------------------------------------------
@@ -87,20 +126,29 @@ async def scan(req: ScanRequest):
         }
     }
     """
-    if not req.text.strip():
-        raise HTTPException(status_code=400, detail="text must not be empty")
+    analysis_text = req.text.strip() or req.url.strip()
+    if not analysis_text:
+        raise HTTPException(status_code=400, detail="text or url must not be empty")
 
     try:
-        result = await analyze_scam(req.text, req.url)
+        result = await analyze_scam(analysis_text, req.url)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except RuntimeError as e:
         raise HTTPException(status_code=502, detail=str(e))
 
+    try:
+        auto_report = _auto_report_scan_result(result, req.url)
+    except EnvironmentError as e:
+        raise HTTPException(status_code=503, detail=f"Blockchain not configured yet: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Auto-report failed: {e}")
+
     # Return schema — strip internal _raw keys not needed by frontend
     raw = result.pop("_raw", {})
     return {
         **result,
+        "autoReport": auto_report,
         "rawDetail": {
             "scamScore":       raw.get("scam_score"),
             "riskLevel":       raw.get("risk_level"),
@@ -129,12 +177,15 @@ async def report(req: ReportRequest):
     Returns 400 if AIService does not classify text as a scam (riskScore < 30).
     Returns 503 if blockchain is not yet configured (waiting for Person 1).
     """
-    if not req.text.strip():
-        raise HTTPException(status_code=400, detail="text must not be empty")
+    analysis_text = req.text.strip() or req.url.strip()
+    if not analysis_text:
+        raise HTTPException(status_code=400, detail="text or url must not be empty")
+
+    report_target = req.url.strip() or analysis_text
 
     # Step 1 — AI verification (gate: must be a real scam before hitting the chain)
     try:
-        result = await analyze_scam(req.text, req.url)
+        result = await analyze_scam(analysis_text, req.url)
     except (ValueError, RuntimeError) as e:
         raise HTTPException(status_code=502, detail=f"AI analysis failed: {e}")
 
@@ -150,10 +201,19 @@ async def report(req: ReportRequest):
             ),
         )
 
+    hash_hex = None
+    if req.url.strip():
+        try:
+            hash_hex = save_url_hash(req.url)
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+        except Exception as e:
+            raise HTTPException(status_code=502, detail=f"Failed to save URL mapping: {e}")
+
     # Step 2 — Blockchain write
     try:
         tx_hash = submit_report(
-            text=req.text,
+            text=report_target,
             category=result["category"],
             risk_score=result["riskScore"],
             actual_reporter=req.reporterAddress.strip() or None,
@@ -165,6 +225,7 @@ async def report(req: ReportRequest):
 
     return {
         "txHash":      tx_hash,
+        "textHash":    hash_hex,
         "polygonscan": f"https://amoy.polygonscan.com/tx/{tx_hash}",
         "analysis":    result,
     }
@@ -187,7 +248,7 @@ async def reports():
     ]
     """
     try:
-        return get_all_reports()
+        return enrich_reports(get_all_reports())
     except EnvironmentError as e:
         raise HTTPException(status_code=503, detail=f"Blockchain not configured yet: {e}")
     except Exception as e:
@@ -212,7 +273,7 @@ async def get_report_by_id(report_id: int):
     }
     """
     try:
-        report = get_report(report_id)
+        report = enrich_report(get_report(report_id))
         if not report:
             raise HTTPException(status_code=404, detail="Report not found")
         return report
@@ -232,7 +293,7 @@ async def get_report_by_hash_endpoint(hash_hex: str):
     Response: Same as /api/reports/{id} or null if not found
     """
     try:
-        report = get_report_by_hash(hash_hex)
+        report = enrich_report(get_report_by_hash(hash_hex))
         if not report:
             raise HTTPException(status_code=404, detail="Report not found")
         return report
@@ -323,7 +384,7 @@ async def vote(req: VoteRequest):
 
 
 @app.get("/api/check")
-async def check(text: str):
+async def check(text: str = "", url: str = ""):
     """
     Check if text has already been reported by hashing it.
     
@@ -333,16 +394,26 @@ async def check(text: str):
         "report": {...}  // full report if exists, null if not
     }
     """
-    if not text.strip():
-        raise HTTPException(status_code=400, detail="text parameter is required")
+    target = url.strip() or text.strip()
+    if not target:
+        raise HTTPException(status_code=400, detail="text or url parameter is required")
     
     try:
-        # Hash the text using keccak256 (same as contract)
+        # Hash the text or URL using keccak256 (same as contract)
         from web3 import Web3
-        text_hash = "0x" + Web3.keccak(text=text.strip()).hex()
+        text_hash = "0x" + Web3.keccak(text=target).hex()
         
         result = check_hash(text_hash)
-        return result
+        report = enrich_report(result.get("report"))
+        exists = bool(result.get("exists"))
+        return {
+            "flagged": exists,
+            "exists": exists,
+            "riskScore": report.get("riskScore", 0) if report else 0,
+            "category": report.get("category") if report else None,
+            "votes": report.get("votes", 0) if report else 0,
+            "report": report,
+        }
     except EnvironmentError as e:
         raise HTTPException(status_code=503, detail=f"Blockchain not configured yet: {e}")
     except Exception as e:
@@ -351,4 +422,4 @@ async def check(text: str):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+    uvicorn.run("main:app", host="0.0.0.0", port=10000, reload=True)

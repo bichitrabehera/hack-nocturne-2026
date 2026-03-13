@@ -1,0 +1,10 @@
+{
+  "url_model": "pirocheto/phishing-url-detection",
+  "text_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "downloaded": "2026-03-13T10:30:27.316098Z",
+  "files": {
+    "url_model": "models/url_model.pkl",
+    "text_model": "models/text_model/",
+    "anchors": "models/anchors.pkl"
+  }
+}
