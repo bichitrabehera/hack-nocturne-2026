@@ -1205,19 +1205,11 @@ export default function AttackSimulator() {
         )}
 
         {/* Indicators */}
-        {result?.indicators?.length > 0 && (
-          <div className="mb-4 border border-gray-700 rounded-xl p-3 bg-[#0b1117]">
-            <p className="text-[10px] font-mono text-gray-400 mb-2">
-              Threat Indicators
-            </p>
-
-            <ul className="space-y-1">
-              {result.indicators.map((i, idx) => (
-                <li key={idx} className="text-xs font-mono text-red-400">
-                  • {i}
-                </li>
-              ))}
-            </ul>
+        {(result?.indicators?.length ?? 0) > 0 && (
+          <div>
+            {result!.indicators!.map((item, index) => (
+              <p key={index}>{item}</p>
+            ))}
           </div>
         )}
 
