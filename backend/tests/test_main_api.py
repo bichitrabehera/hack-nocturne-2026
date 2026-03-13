@@ -353,6 +353,70 @@ def test_reports_maps_chain_errors(monkeypatch):
     assert fail.status_code == 502
 
 
+def test_feed_xml_returns_rss(monkeypatch):
+    _no_lifespan(monkeypatch)
+
+    reports = [
+        {
+            "id": 2,
+            "textHash": "0xbbb",
+            "category": "phishing",
+            "riskScore": 88,
+            "timestamp": 200,
+            "votes": 7,
+            "url": "https://bad.example/path?a=1&b=2",
+        },
+        {
+            "id": 1,
+            "textHash": "0xaaa",
+            "category": "other",
+            "riskScore": 55,
+            "timestamp": 100,
+            "votes": 1,
+            "url": "https://older.example",
+        },
+    ]
+
+    monkeypatch.setattr(main, "get_all_reports", lambda: reports)
+    monkeypatch.setattr(main, "enrich_reports", lambda values: values)
+
+    with TestClient(main.app) as client:
+        resp = client.get("/api/feed.xml", params={"limit": 1})
+
+    assert resp.status_code == 200
+    assert resp.headers["content-type"].startswith("application/rss+xml")
+    assert "<?xml version=\"1.0\" encoding=\"UTF-8\"?>" in resp.text
+    assert "<rss version=\"2.0\">" in resp.text
+    assert "<channel>" in resp.text
+    assert "<title>Nocturne Scam Alerts</title>" in resp.text
+    assert resp.text.count("<item>") == 1
+    assert "Risk 88" in resp.text
+    assert "&amp;" in resp.text
+
+
+def test_feed_xml_maps_backend_errors(monkeypatch):
+    _no_lifespan(monkeypatch)
+
+    monkeypatch.setattr(
+        main,
+        "get_all_reports",
+        lambda: (_ for _ in ()).throw(EnvironmentError("missing env")),
+    )
+    with TestClient(main.app) as client:
+        env = client.get("/api/feed.xml")
+    assert env.status_code == 503
+
+    monkeypatch.setattr(main, "get_all_reports", lambda: [{"id": 1, "timestamp": 1}])
+    monkeypatch.setattr(
+        main,
+        "enrich_reports",
+        lambda values: (_ for _ in ()).throw(RuntimeError("db down")),
+    )
+    with TestClient(main.app) as client:
+        fail = client.get("/api/feed.xml")
+    assert fail.status_code == 502
+
+
 def test_get_report_by_id_success_and_not_found(monkeypatch):
     _no_lifespan(monkeypatch)
 

@@ -5,10 +5,14 @@ Backend API routes that connect AI analysis, blockchain reads/writes, and local 
 
 import logging
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
+from email.utils import format_datetime
+from xml.sax.saxutils import escape
 
 import requests
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import Response
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from web3 import Web3
@@ -25,6 +29,7 @@ from pg_db_service import (
     test_connection,
 )
 from honeytrap_service import run_honeytrap_bot
+from webhook_service import webhook_service
 from web3_services import (
     submit_report, get_all_reports, get_report, get_report_by_hash, 
     check_hash, vote_on_report, get_report_count
@@ -48,6 +53,80 @@ def _dedupe_strings(values: list[str]) -> list[str]:
         seen.add(key)
         out.append(item)
     return out
+
+
+def _to_rss_pub_date(timestamp: int | None) -> str:
+    if isinstance(timestamp, int) and timestamp > 0:
+        dt = datetime.fromtimestamp(timestamp, tz=timezone.utc)
+    else:
+        dt = datetime.now(tz=timezone.utc)
+    return format_datetime(dt)
+
+
+def _report_feed_link(report: dict, request: Request) -> str:
+    report_id = report.get("id")
+    if isinstance(report_id, int):
+        return str(request.url_for("get_report_by_id", report_id=str(report_id)))
+
+    text_hash = (report.get("textHash") or "").strip()
+    if text_hash:
+        return str(request.url_for("get_report_by_hash_endpoint", hash_hex=text_hash))
+
+    fallback = (report.get("url") or "").strip()
+    return fallback or str(request.base_url)
+
+
+def _build_rss_feed_xml(reports: list[dict], request: Request, feed_limit: int) -> str:
+    now_pub_date = _to_rss_pub_date(None)
+    sorted_reports = sorted(reports, key=lambda r: int(r.get("timestamp", 0) or 0), reverse=True)
+    selected = sorted_reports[:feed_limit]
+
+    items: list[str] = []
+    for report in selected:
+        category = str(report.get("category", "unknown"))
+        risk_score = int(report.get("riskScore", 0) or 0)
+        report_url = (report.get("url") or "").strip()
+        link = _report_feed_link(report, request)
+        text_hash = (report.get("textHash") or "").strip() or f"report-{report.get('id', 'unknown')}"
+        timestamp = int(report.get("timestamp", 0) or 0)
+        title = f"[{category.upper()}] Risk {risk_score}"
+        if report_url:
+            title = f"{title} - {report_url}"
+
+        description_parts = [
+            f"Category: {category}",
+            f"Risk Score: {risk_score}",
+            f"Votes: {int(report.get('votes', 0) or 0)}",
+        ]
+        if report_url:
+            description_parts.append(f"URL: {report_url}")
+
+        item_xml = (
+            "<item>"
+            f"<title>{escape(title)}</title>"
+            f"<link>{escape(link)}</link>"
+            f"<guid isPermaLink=\"false\">{escape(text_hash)}</guid>"
+            f"<pubDate>{escape(_to_rss_pub_date(timestamp))}</pubDate>"
+            f"<description>{escape(' | '.join(description_parts))}</description>"
+            "</item>"
+        )
+        items.append(item_xml)
+
+    channel_link = str(request.base_url).rstrip("/")
+    rss = (
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>"
+        "<rss version=\"2.0\">"
+        "<channel>"
+        "<title>Nocturne Scam Alerts</title>"
+        f"<link>{escape(channel_link)}</link>"
+        "<description>Real-time blockchain-backed scam alerts from Nocturne</description>"
+        "<language>en-us</language>"
+        f"<lastBuildDate>{escape(now_pub_date)}</lastBuildDate>"
+        f"{''.join(items)}"
+        "</channel>"
+        "</rss>"
+    )
+    return rss
 
 
 # ---------------------------------------------------------------------------
@@ -260,6 +339,28 @@ async def report(req: ReportRequest):
         raise HTTPException(status_code=503, detail=f"Blockchain not configured yet: {e}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Blockchain submission failed: {e}")
+
+    # Auto-report high-risk URLs
+    if result.riskScore >= 70 and result.category.lower() in AUTO_REPORT_URL_STATUSES:
+        try:
+            tx_hash = submit_report(
+                content_hash=hash_hex,
+                category=result["category"],
+                risk_score=result["riskScore"],
+                reporter_address=req.reporterAddress.strip() or None
+            )
+            logger.info(f"Auto-reported to blockchain: {tx_hash}")
+            
+            # Send Discord alert
+            await webhook_service.scam_reported(
+                url=req.url,
+                category=result["category"],
+                risk_score=result["riskScore"],
+                reporter=req.reporterAddress[:20] + "..." if len(req.reporterAddress) > 20 else req.reporterAddress
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to auto-report: {e}")
 
     return {
         "txHash":      tx_hash,
@@ -508,6 +609,11 @@ async def run_honeytrap(req: HoneytrapRequest):
                     )
                     wallet_report["submitted"] = True
                     wallet_report["txHash"] = tx_hash
+                    if wallet_report.get("submitted"):
+                        await webhook_service.wallet_blockchain_reported(
+                            wallets=result.get("wallets", []),
+                            tx_hash=wallet_report.get("txHash", "")
+                        )
             except Exception as blockchain_error:
                 wallet_report["error"] = str(blockchain_error)
 
@@ -516,6 +622,9 @@ async def run_honeytrap(req: HoneytrapRequest):
         history_wallets = _dedupe_strings([w for row in history_rows for w in row.get("wallets", [])])
         history_telegram = _dedupe_strings([t for row in history_rows for t in row.get("telegramIds", [])])
         history_emails = _dedupe_strings([e for row in history_rows for e in row.get("emails", [])])
+        
+        # Send Discord alert for high-value intel
+        await webhook_service.honeytrap_alert(req.url, result)
         history_payments = _dedupe_strings([p for row in history_rows for p in row.get("paymentInstructions", [])])
 
         return {
@@ -545,6 +654,19 @@ async def honeytrap_intel(limit: int = 20, domain: str = ""):
         return get_honeytrap_intel(safe_limit, domain=normalized_domain or None)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch honeytrap intel: {e}")
+
+
+@app.get("/api/feed.xml")
+async def rss_feed(request: Request, limit: int = 20):
+    try:
+        safe_limit = max(1, min(limit, 100))
+        reports = enrich_reports(get_all_reports())
+        rss_xml = _build_rss_feed_xml(reports, request, safe_limit)
+        return Response(content=rss_xml, media_type="application/rss+xml")
+    except EnvironmentError as e:
+        raise HTTPException(status_code=503, detail=f"Blockchain not configured yet: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to build RSS feed: {e}")
 
 
 if __name__ == "__main__":
