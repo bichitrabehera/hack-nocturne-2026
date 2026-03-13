@@ -343,3 +343,270 @@ def test_get_all_reports_parses_new_registry_struct_layout(monkeypatch):
             "timestamp": 1712345680,
         }
     ]
+
+
+def test_get_report_formats_registry_tuple(monkeypatch):
+    class FakeCall:
+        @staticmethod
+        def call():
+            return (7, "0xabc", b"\x01\x02", "phishing", 88, 999, 4, True, False)
+
+    class FakeFunctions:
+        @staticmethod
+        def getReport(report_id):
+            assert report_id == 7
+            return FakeCall()
+
+    class FakeContract:
+        functions = FakeFunctions()
+
+    monkeypatch.setattr(web3_services, "_get_web3", lambda: object())
+    monkeypatch.setattr(web3_services, "_get_contract", lambda _w3: FakeContract())
+
+    report = web3_services.get_report(7)
+    assert report == {
+        "id": 7,
+        "reporter": "0xabc",
+        "textHash": "0x0102",
+        "category": "phishing",
+        "riskScore": 88,
+        "timestamp": 999,
+        "votes": 4,
+        "isVerified": True,
+        "isCommunityReport": False,
+    }
+
+
+def test_get_report_by_hash_converts_hash_and_formats_result(monkeypatch):
+    class FakeCall:
+        @staticmethod
+        def call():
+            return (3, "0xabc", b"\xaa", "other", 45, 111, 1, False, True)
+
+    class FakeFunctions:
+        @staticmethod
+        def getReportByHash(hash_bytes):
+            assert hash_bytes == b"decoded"
+            return FakeCall()
+
+    class FakeContract:
+        functions = FakeFunctions()
+
+    monkeypatch.setattr(web3_services, "_get_web3", lambda: object())
+    monkeypatch.setattr(web3_services, "_get_contract", lambda _w3: FakeContract())
+    monkeypatch.setattr(web3_services.Web3, "to_bytes", lambda hexstr: b"decoded")
+
+    report = web3_services.get_report_by_hash("0xhash")
+    assert report["id"] == 3
+    assert report["textHash"] == "0xaa"
+    assert report["category"] == "other"
+    assert report["isCommunityReport"] is True
+
+
+def test_get_report_by_hash_returns_none(monkeypatch):
+    class FakeCall:
+        @staticmethod
+        def call():
+            return None
+
+    class FakeFunctions:
+        @staticmethod
+        def getReportByHash(hash_bytes):
+            return FakeCall()
+
+    class FakeContract:
+        functions = FakeFunctions()
+
+    monkeypatch.setattr(web3_services, "_get_web3", lambda: object())
+    monkeypatch.setattr(web3_services, "_get_contract", lambda _w3: FakeContract())
+    monkeypatch.setattr(web3_services.Web3, "to_bytes", lambda hexstr: b"decoded")
+
+    assert web3_services.get_report_by_hash("0xhash") is None
+
+
+def test_check_hash_returns_exists_and_report(monkeypatch):
+    class FakeCall:
+        @staticmethod
+        def call():
+            return True
+
+    class FakeFunctions:
+        @staticmethod
+        def checkHash(hash_bytes):
+            assert hash_bytes == b"decoded"
+            return FakeCall()
+
+    class FakeContract:
+        functions = FakeFunctions()
+
+    monkeypatch.setattr(web3_services, "_get_web3", lambda: object())
+    monkeypatch.setattr(web3_services, "_get_contract", lambda _w3: FakeContract())
+    monkeypatch.setattr(web3_services.Web3, "to_bytes", lambda hexstr: b"decoded")
+    monkeypatch.setattr(web3_services, "get_report_by_hash", lambda hash_hex: {"id": 1})
+
+    result = web3_services.check_hash("0xhash")
+    assert result == {"exists": True, "report": {"id": 1}}
+
+
+def test_check_hash_returns_false_when_missing(monkeypatch):
+    class FakeCall:
+        @staticmethod
+        def call():
+            return False
+
+    class FakeFunctions:
+        @staticmethod
+        def checkHash(hash_bytes):
+            return FakeCall()
+
+    class FakeContract:
+        functions = FakeFunctions()
+
+    monkeypatch.setattr(web3_services, "_get_web3", lambda: object())
+    monkeypatch.setattr(web3_services, "_get_contract", lambda _w3: FakeContract())
+    monkeypatch.setattr(web3_services.Web3, "to_bytes", lambda hexstr: b"decoded")
+
+    result = web3_services.check_hash("0xhash")
+    assert result == {"exists": False, "report": None}
+
+
+def test_vote_on_report_success(monkeypatch):
+    class FakeTxHash:
+        def hex(self):
+            return "0xvote"
+
+    class FakeReceipt:
+        status = 1
+
+    class FakeSigned:
+        raw_transaction = b"raw"
+
+    class FakeCallBuilder:
+        def build_transaction(self, tx):
+            assert tx["from"] == "0xwallet"
+            assert tx["nonce"] == 4
+            return {"built": True}
+
+    class FakeFunctions:
+        @staticmethod
+        def voteOnReport(report_id):
+            assert report_id == 9
+            return FakeCallBuilder()
+
+    class FakeContract:
+        functions = FakeFunctions()
+
+    class FakeAccountOps:
+        @staticmethod
+        def sign_transaction(tx, key):
+            assert tx == {"built": True}
+            assert key == b"wallet-key"
+            return FakeSigned()
+
+    class FakeEth:
+        account = FakeAccountOps()
+
+        @staticmethod
+        def get_transaction_count(_address):
+            return 4
+
+        @staticmethod
+        def send_raw_transaction(raw_transaction):
+            assert raw_transaction == b"raw"
+            return FakeTxHash()
+
+        @staticmethod
+        def wait_for_transaction_receipt(tx_hash):
+            return FakeReceipt()
+
+    class FakeW3:
+        eth = FakeEth()
+
+    class FakeWallet:
+        address = "0xwallet"
+        key = b"wallet-key"
+
+    monkeypatch.setattr(web3_services, "_get_web3", lambda: FakeW3())
+    monkeypatch.setattr(web3_services, "_get_contract", lambda _w3: FakeContract())
+    monkeypatch.setattr(web3_services, "_get_wallet", lambda _w3: FakeWallet())
+
+    assert web3_services.vote_on_report(9) == "0xvote"
+
+
+def test_vote_on_report_failure(monkeypatch):
+    class FakeReceipt:
+        status = 0
+
+    class FakeTxHash:
+        def hex(self):
+            return "0xvote"
+
+    class FakeSigned:
+        rawTransaction = b"legacy"
+
+    class FakeCallBuilder:
+        def build_transaction(self, tx):
+            return {"built": True}
+
+    class FakeFunctions:
+        @staticmethod
+        def voteOnReport(report_id):
+            return FakeCallBuilder()
+
+    class FakeContract:
+        functions = FakeFunctions()
+
+    class FakeAccountOps:
+        @staticmethod
+        def sign_transaction(tx, key):
+            return FakeSigned()
+
+    class FakeEth:
+        account = FakeAccountOps()
+
+        @staticmethod
+        def get_transaction_count(_address):
+            return 4
+
+        @staticmethod
+        def send_raw_transaction(raw_transaction):
+            assert raw_transaction == b"legacy"
+            return FakeTxHash()
+
+        @staticmethod
+        def wait_for_transaction_receipt(tx_hash):
+            return FakeReceipt()
+
+    class FakeW3:
+        eth = FakeEth()
+
+    class FakeWallet:
+        address = "0xwallet"
+        key = b"wallet-key"
+
+    monkeypatch.setattr(web3_services, "_get_web3", lambda: FakeW3())
+    monkeypatch.setattr(web3_services, "_get_contract", lambda _w3: FakeContract())
+    monkeypatch.setattr(web3_services, "_get_wallet", lambda _w3: FakeWallet())
+
+    with pytest.raises(RuntimeError, match="Failed to vote on report 9"):
+        web3_services.vote_on_report(9)
+
+
+def test_get_report_count(monkeypatch):
+    class FakeCall:
+        @staticmethod
+        def call():
+            return 12
+
+    class FakeFunctions:
+        @staticmethod
+        def reportCount():
+            return FakeCall()
+
+    class FakeContract:
+        functions = FakeFunctions()
+
+    monkeypatch.setattr(web3_services, "_get_web3", lambda: object())
+    monkeypatch.setattr(web3_services, "_get_contract", lambda _w3: FakeContract())
+
+    assert web3_services.get_report_count() == 12

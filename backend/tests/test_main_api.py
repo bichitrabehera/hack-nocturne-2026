@@ -237,3 +237,225 @@ def test_reports_maps_chain_errors(monkeypatch):
     with TestClient(main.app) as client:
         fail = client.get("/api/reports")
     assert fail.status_code == 502
+
+
+def test_get_report_by_id_success_and_not_found(monkeypatch):
+    _no_lifespan(monkeypatch)
+
+    monkeypatch.setattr(
+        main,
+        "get_report",
+        lambda report_id: {
+            "id": report_id,
+            "reporter": "0x1",
+            "textHash": "0xabc",
+            "category": "phishing",
+            "riskScore": 85,
+            "timestamp": 123,
+            "votes": 2,
+            "isVerified": True,
+            "isCommunityReport": False,
+        },
+    )
+    with TestClient(main.app) as client:
+        ok = client.get("/api/reports/7")
+    assert ok.status_code == 200
+    assert ok.json()["id"] == 7
+
+    monkeypatch.setattr(main, "get_report", lambda report_id: None)
+    with TestClient(main.app) as client:
+        missing = client.get("/api/reports/7")
+    assert missing.status_code == 404
+
+
+def test_get_report_by_id_maps_backend_errors(monkeypatch):
+    _no_lifespan(monkeypatch)
+
+    monkeypatch.setattr(
+        main,
+        "get_report",
+        lambda report_id: (_ for _ in ()).throw(EnvironmentError("missing env")),
+    )
+    with TestClient(main.app) as client:
+        env = client.get("/api/reports/1")
+    assert env.status_code == 503
+
+    monkeypatch.setattr(
+        main,
+        "get_report",
+        lambda report_id: (_ for _ in ()).throw(RuntimeError("bad rpc")),
+    )
+    with TestClient(main.app) as client:
+        fail = client.get("/api/reports/1")
+    assert fail.status_code == 502
+
+
+def test_get_report_by_hash_success_and_not_found(monkeypatch):
+    _no_lifespan(monkeypatch)
+
+    monkeypatch.setattr(
+        main,
+        "get_report_by_hash",
+        lambda hash_hex: {
+            "id": 3,
+            "reporter": "0x1",
+            "textHash": hash_hex,
+            "category": "phishing",
+            "riskScore": 99,
+            "timestamp": 456,
+            "votes": 5,
+            "isVerified": False,
+            "isCommunityReport": True,
+        },
+    )
+    with TestClient(main.app) as client:
+        ok = client.get("/api/reports/hash/0xabc")
+    assert ok.status_code == 200
+    assert ok.json()["textHash"] == "0xabc"
+
+    monkeypatch.setattr(main, "get_report_by_hash", lambda hash_hex: None)
+    with TestClient(main.app) as client:
+        missing = client.get("/api/reports/hash/0xabc")
+    assert missing.status_code == 404
+
+
+def test_get_report_by_hash_maps_backend_errors(monkeypatch):
+    _no_lifespan(monkeypatch)
+
+    monkeypatch.setattr(
+        main,
+        "get_report_by_hash",
+        lambda hash_hex: (_ for _ in ()).throw(EnvironmentError("missing env")),
+    )
+    with TestClient(main.app) as client:
+        env = client.get("/api/reports/hash/0xabc")
+    assert env.status_code == 503
+
+    monkeypatch.setattr(
+        main,
+        "get_report_by_hash",
+        lambda hash_hex: (_ for _ in ()).throw(RuntimeError("bad rpc")),
+    )
+    with TestClient(main.app) as client:
+        fail = client.get("/api/reports/hash/0xabc")
+    assert fail.status_code == 502
+
+
+def test_stats_computes_summary(monkeypatch):
+    _no_lifespan(monkeypatch)
+    reports = [
+        {"category": "phishing", "riskScore": 80, "timestamp": 10, "isVerified": True},
+        {"category": "other", "riskScore": 40, "timestamp": 20, "isVerified": False},
+        {"category": "phishing", "riskScore": 100, "timestamp": 15, "isVerified": True},
+    ]
+    monkeypatch.setattr(main, "get_all_reports", lambda: reports)
+
+    with TestClient(main.app) as client:
+        resp = client.get("/api/stats")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["totalReports"] == 3
+    assert body["verifiedReports"] == 2
+    assert body["categoryBreakdown"] == {"phishing": 2, "other": 1}
+    assert body["averageRiskScore"] == 73.3
+    assert body["highestRiskReport"]["riskScore"] == 100
+    assert body["mostRecentReport"]["timestamp"] == 20
+
+
+def test_stats_empty_and_error_paths(monkeypatch):
+    _no_lifespan(monkeypatch)
+    monkeypatch.setattr(main, "get_all_reports", lambda: [])
+    with TestClient(main.app) as client:
+        empty = client.get("/api/stats")
+    assert empty.status_code == 200
+    assert empty.json()["totalReports"] == 0
+    assert empty.json()["averageRiskScore"] == 0
+
+    monkeypatch.setattr(
+        main,
+        "get_all_reports",
+        lambda: (_ for _ in ()).throw(EnvironmentError("missing env")),
+    )
+    with TestClient(main.app) as client:
+        env = client.get("/api/stats")
+    assert env.status_code == 503
+
+    monkeypatch.setattr(
+        main,
+        "get_all_reports",
+        lambda: (_ for _ in ()).throw(RuntimeError("bad rpc")),
+    )
+    with TestClient(main.app) as client:
+        fail = client.get("/api/stats")
+    assert fail.status_code == 502
+
+
+def test_vote_success_and_errors(monkeypatch):
+    _no_lifespan(monkeypatch)
+    monkeypatch.setattr(main, "vote_on_report", lambda report_id: "0xvote")
+    with TestClient(main.app) as client:
+        ok = client.post("/api/vote", json={"reportId": 5})
+    assert ok.status_code == 200
+    assert ok.json()["txHash"] == "0xvote"
+
+    monkeypatch.setattr(
+        main,
+        "vote_on_report",
+        lambda report_id: (_ for _ in ()).throw(EnvironmentError("missing env")),
+    )
+    with TestClient(main.app) as client:
+        env = client.post("/api/vote", json={"reportId": 5})
+    assert env.status_code == 503
+
+    monkeypatch.setattr(
+        main,
+        "vote_on_report",
+        lambda report_id: (_ for _ in ()).throw(RuntimeError("vote failed")),
+    )
+    with TestClient(main.app) as client:
+        fail = client.post("/api/vote", json={"reportId": 5})
+    assert fail.status_code == 502
+
+
+def test_check_requires_text_and_returns_result(monkeypatch):
+    _no_lifespan(monkeypatch)
+
+    with TestClient(main.app) as client:
+        missing = client.get("/api/check", params={"text": "   "})
+    assert missing.status_code == 400
+
+    observed = {"hash_hex": None}
+
+    def _check_hash(hash_hex):
+        observed["hash_hex"] = hash_hex
+        return {"exists": True, "report": {"id": 1}}
+
+    monkeypatch.setattr(main, "check_hash", _check_hash)
+    with TestClient(main.app) as client:
+        ok = client.get("/api/check", params={"text": "hello world"})
+    assert ok.status_code == 200
+    assert ok.json() == {"exists": True, "report": {"id": 1}}
+    assert observed["hash_hex"].startswith("0x")
+
+
+def test_check_maps_backend_errors(monkeypatch):
+    _no_lifespan(monkeypatch)
+
+    monkeypatch.setattr(
+        main,
+        "check_hash",
+        lambda hash_hex: (_ for _ in ()).throw(EnvironmentError("missing env")),
+    )
+    with TestClient(main.app) as client:
+        env = client.get("/api/check", params={"text": "hello"})
+    assert env.status_code == 503
+
+    monkeypatch.setattr(
+        main,
+        "check_hash",
+        lambda hash_hex: (_ for _ in ()).throw(RuntimeError("bad rpc")),
+    )
+    with TestClient(main.app) as client:
+        fail = client.get("/api/check", params={"text": "hello"})
+    assert fail.status_code == 502

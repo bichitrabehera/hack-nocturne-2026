@@ -13,7 +13,10 @@ from pydantic import BaseModel
 from dotenv import load_dotenv
 
 from ai_analyzer import analyze_scam, startup as ai_startup, shutdown as ai_shutdown
-from web3_services import submit_report, get_all_reports
+from web3_services import (
+    submit_report, get_all_reports, get_report, get_report_by_hash, 
+    check_hash, vote_on_report, get_report_count
+)
 
 load_dotenv()
 logger = logging.getLogger(__name__)
@@ -57,6 +60,9 @@ class ReportRequest(BaseModel):
     text: str
     url: str = ""
     reporterAddress: str = ""
+
+class VoteRequest(BaseModel):
+    reportId: int
 
 
 # ---------------------------------------------------------------------------
@@ -186,6 +192,161 @@ async def reports():
         raise HTTPException(status_code=503, detail=f"Blockchain not configured yet: {e}")
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch reports: {e}")
+
+
+@app.get("/api/reports/{report_id}")
+async def get_report_by_id(report_id: int):
+    """
+    Get a single report by ID.
+    
+    Response: {
+        "id": int,
+        "reporter": "0x...",
+        "textHash": "0x...",
+        "category": "phishing",
+        "riskScore": 85,
+        "timestamp": 1712345678,
+        "votes": 5,
+        "isVerified": true,
+        "isCommunityReport": false
+    }
+    """
+    try:
+        report = get_report(report_id)
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+        return report
+    except HTTPException:
+        raise
+    except EnvironmentError as e:
+        raise HTTPException(status_code=503, detail=f"Blockchain not configured yet: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch report: {e}")
+
+
+@app.get("/api/reports/hash/{hash_hex}")
+async def get_report_by_hash_endpoint(hash_hex: str):
+    """
+    Get a single report by content hash.
+    
+    Response: Same as /api/reports/{id} or null if not found
+    """
+    try:
+        report = get_report_by_hash(hash_hex)
+        if not report:
+            raise HTTPException(status_code=404, detail="Report not found")
+        return report
+    except HTTPException:
+        raise
+    except EnvironmentError as e:
+        raise HTTPException(status_code=503, detail=f"Blockchain not configured yet: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to fetch report by hash: {e}")
+
+
+@app.get("/api/stats")
+async def get_stats():
+    """
+    Get dashboard statistics computed from all reports.
+    
+    Response: {
+        "totalReports": 100,
+        "verifiedReports": 25,
+        "categoryBreakdown": {
+            "phishing": 45,
+            "other": 30,
+            "legitimate": 25
+        },
+        "averageRiskScore": 67.5,
+        "highestRiskReport": {...},
+        "mostRecentReport": {...}
+    }
+    """
+    try:
+        reports = get_all_reports()
+        
+        # Basic counts
+        total_reports = len(reports)
+        verified_reports = sum(1 for r in reports if r.get("isVerified", False))
+        
+        # Category breakdown
+        category_breakdown = {}
+        for report in reports:
+            category = report.get("category", "other")
+            category_breakdown[category] = category_breakdown.get(category, 0) + 1
+        
+        # Average risk score
+        risk_scores = [r.get("riskScore", 0) for r in reports]
+        average_risk = sum(risk_scores) / len(risk_scores) if risk_scores else 0
+        
+        # Highest risk report
+        highest_risk_report = max(reports, key=lambda r: r.get("riskScore", 0)) if reports else None
+        
+        # Most recent report
+        most_recent_report = max(reports, key=lambda r: r.get("timestamp", 0)) if reports else None
+        
+        return {
+            "totalReports": total_reports,
+            "verifiedReports": verified_reports,
+            "categoryBreakdown": category_breakdown,
+            "averageRiskScore": round(average_risk, 1),
+            "highestRiskReport": highest_risk_report,
+            "mostRecentReport": most_recent_report
+        }
+    except EnvironmentError as e:
+        raise HTTPException(status_code=503, detail=f"Blockchain not configured yet: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to compute stats: {e}")
+
+
+@app.post("/api/vote")
+async def vote(req: VoteRequest):
+    """
+    Vote on a report.
+    
+    Request: { "reportId": 123 }
+    Response: {
+        "txHash": "0x...",
+        "polygonscan": "https://amoy.polygonscan.com/tx/0x..."
+    }
+    """
+    try:
+        tx_hash = vote_on_report(req.reportId)
+        return {
+            "txHash": tx_hash,
+            "polygonscan": f"https://amoy.polygonscan.com/tx/{tx_hash}"
+        }
+    except EnvironmentError as e:
+        raise HTTPException(status_code=503, detail=f"Blockchain not configured yet: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to vote: {e}")
+
+
+@app.get("/api/check")
+async def check(text: str):
+    """
+    Check if text has already been reported by hashing it.
+    
+    Query: ?text=...
+    Response: {
+        "exists": true,
+        "report": {...}  // full report if exists, null if not
+    }
+    """
+    if not text.strip():
+        raise HTTPException(status_code=400, detail="text parameter is required")
+    
+    try:
+        # Hash the text using keccak256 (same as contract)
+        from web3 import Web3
+        text_hash = "0x" + Web3.keccak(text=text.strip()).hex()
+        
+        result = check_hash(text_hash)
+        return result
+    except EnvironmentError as e:
+        raise HTTPException(status_code=503, detail=f"Blockchain not configured yet: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=502, detail=f"Failed to check hash: {e}")
 
 
 if __name__ == "__main__":

@@ -26,6 +26,21 @@ PRIVATE_KEY       = os.getenv("BACKEND_PRIVATE_KEY")
 # Must include at minimum: communityReport() and getAllReports()
 CONTRACT_ABI = json.loads(os.getenv("CONTRACT_ABI", "[]"))
 
+
+def _to_hex(value):
+    if isinstance(value, (bytes, bytearray)):
+        return "0x" + bytes(value).hex()
+    return value
+
+
+def _to_text(value):
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            return bytes(value).decode("utf-8")
+        except UnicodeDecodeError:
+            return "0x" + bytes(value).hex()
+    return value
+
 def _get_web3() -> Web3:
     if not ALCHEMY_URL:
         raise EnvironmentError("ALCHEMY_AMOY_URL is not set in .env")
@@ -145,19 +160,6 @@ def get_all_reports() -> list[dict]:
 
     raw_reports = contract.functions.getAllReports().call()
 
-    def _to_hex(value):
-        if isinstance(value, (bytes, bytearray)):
-            return "0x" + bytes(value).hex()
-        return value
-
-    def _to_text(value):
-        if isinstance(value, (bytes, bytearray)):
-            try:
-                return bytes(value).decode("utf-8")
-            except UnicodeDecodeError:
-                return "0x" + bytes(value).hex()
-        return value
-
     formatted = []
     for r in raw_reports:
         # New struct layout (ScamRegistry):
@@ -186,6 +188,159 @@ def get_all_reports() -> list[dict]:
         })
 
     return formatted
+
+
+def get_report(report_id: int) -> dict:
+    """
+    Call getReport(id) on the contract and return a single report.
+    """
+    w3 = _get_web3()
+    contract = _get_contract(w3)
+    
+    try:
+        report = contract.functions.getReport(report_id).call()
+        (
+            id,
+            reporter,
+            text_hash,
+            category,
+            risk_score,
+            timestamp,
+            votes,
+            is_verified,
+            is_community_report
+        ) = report
+        
+        return {
+            "id": int(id),
+            "reporter": _to_text(reporter),
+            "textHash": _to_hex(text_hash),
+            "category": _to_text(category),
+            "riskScore": int(risk_score),
+            "timestamp": int(timestamp),
+            "votes": int(votes),
+            "isVerified": bool(is_verified),
+            "isCommunityReport": bool(is_community_report),
+        }
+    except Exception as e:
+        raise RuntimeError(f"Failed to get report {report_id}: {e}")
+
+
+def get_report_by_hash(hash_hex: str) -> dict:
+    """
+    Call getReportByHash(hash) on the contract and return a single report.
+    """
+    w3 = _get_web3()
+    contract = _get_contract(w3)
+    
+    try:
+        # Convert hex string to bytes32
+        hash_bytes = Web3.to_bytes(hexstr=hash_hex)
+        report = contract.functions.getReportByHash(hash_bytes).call()
+        
+        if not report:
+            return None
+            
+        (
+            id,
+            reporter,
+            text_hash,
+            category,
+            risk_score,
+            timestamp,
+            votes,
+            is_verified,
+            is_community_report
+        ) = report
+        
+        return {
+            "id": int(id),
+            "reporter": _to_text(reporter),
+            "textHash": _to_hex(text_hash),
+            "category": _to_text(category),
+            "riskScore": int(risk_score),
+            "timestamp": int(timestamp),
+            "votes": int(votes),
+            "isVerified": bool(is_verified),
+            "isCommunityReport": bool(is_community_report),
+        }
+    except Exception as e:
+        raise RuntimeError(f"Failed to get report by hash {hash_hex}: {e}")
+
+
+def check_hash(hash_hex: str) -> dict:
+    """
+    Call checkHash(hash) on the contract to check if hash exists.
+    """
+    w3 = _get_web3()
+    contract = _get_contract(w3)
+    
+    try:
+        # Convert hex string to bytes32
+        hash_bytes = Web3.to_bytes(hexstr=hash_hex)
+        exists = contract.functions.checkHash(hash_bytes).call()
+        
+        if exists:
+            # If exists, get the full report
+            report = get_report_by_hash(hash_hex)
+            return {
+                "exists": True,
+                "report": report
+            }
+        else:
+            return {
+                "exists": False,
+                "report": None
+            }
+    except Exception as e:
+        raise RuntimeError(f"Failed to check hash {hash_hex}: {e}")
+
+
+def vote_on_report(report_id: int) -> str:
+    """
+    Call voteOnReport(id) on the contract.
+    """
+    w3 = _get_web3()
+    contract = _get_contract(w3)
+    wallet = _get_wallet(w3)
+    
+    try:
+        # Build transaction
+        tx = contract.functions.voteOnReport(report_id).build_transaction({
+            "from": wallet.address,
+            "nonce": w3.eth.get_transaction_count(wallet.address),
+        })
+        
+        # Sign and send transaction
+        signed_tx = w3.eth.account.sign_transaction(tx, wallet.key)
+        raw_transaction = getattr(signed_tx, "raw_transaction", None)
+        if raw_transaction is None:
+            raw_transaction = signed_tx.rawTransaction
+        tx_hash = w3.eth.send_raw_transaction(raw_transaction)
+        
+        # Wait for confirmation
+        receipt = w3.eth.wait_for_transaction_receipt(tx_hash)
+        
+        if receipt.status == 1:
+            return tx_hash.hex()
+        else:
+            raise RuntimeError(f"Transaction failed: {tx_hash.hex()}")
+    except Exception as e:
+        raise RuntimeError(f"Failed to vote on report {report_id}: {e}")
+
+
+def get_report_count() -> int:
+    """
+    Call reportCount() on the contract to get total number of reports.
+    """
+    w3 = _get_web3()
+    contract = _get_contract(w3)
+    
+    try:
+        count = contract.functions.reportCount().call()
+        return int(count)
+    except Exception as e:
+        raise RuntimeError(f"Failed to get report count: {e}")
 
 
 # ---------------------------------------------------------------------------
