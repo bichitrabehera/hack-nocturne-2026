@@ -89,6 +89,7 @@ export default function Dashboard() {
     loadReports();
   }
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadReports(); loadStats(); }, []);
 
   const categoryData = stats?.categoryBreakdown
