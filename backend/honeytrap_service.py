@@ -28,6 +28,14 @@ from db_service import get_honeytrap_network_stats
 
 logger = logging.getLogger(__name__)
 
+PLAYWRIGHT_NAV_TIMEOUT_MS = 12_000
+PLAYWRIGHT_POST_LOAD_WAIT_MS = 800
+CHAT_MAX_EXCHANGES = 2
+CHAT_REPLY_WAIT_MS = 1_200
+REQUEST_CONNECT_TIMEOUT_S = 4
+REQUEST_READ_TIMEOUT_S = 6
+MAX_REQUEST_CANDIDATES = 2
+
 # ─── Regexes ──────────────────────────────────────────────────────────────────
 
 ETH_REGEX      = re.compile(r"\b0x[a-fA-F0-9]{40}\b")
@@ -207,6 +215,50 @@ def _merge_indicators(*dicts) -> dict[str, list[str]]:
     return merged
 
 
+def _build_crawl_diagnostics(crawl_method: str, crawl_failures: list[str]) -> dict[str, Any]:
+    text = "\n".join(crawl_failures).lower()
+    playwright_missing = "no module named 'playwright'" in text
+    dns_failure = (
+        "nameresolutionerror" in text
+        or "failed to resolve" in text
+        or "getaddrinfo failed" in text
+    )
+    timeout_failure = "timed out" in text or "connect timeout" in text
+    unreachable = crawl_method == "url_fallback"
+
+    likely_cause = "none"
+    if playwright_missing and dns_failure:
+        likely_cause = "playwright_missing_and_dns_failure"
+    elif playwright_missing:
+        likely_cause = "playwright_missing"
+    elif dns_failure:
+        likely_cause = "dns_resolution_failed"
+    elif timeout_failure:
+        likely_cause = "target_timeout"
+    elif unreachable:
+        likely_cause = "target_unreachable"
+
+    recommendations: list[str] = []
+    if playwright_missing:
+        recommendations.append("Install Playwright in backend venv and run 'python -m playwright install chromium'")
+    if dns_failure:
+        recommendations.append("Verify domain spelling and DNS availability; try opening the URL in browser")
+    if timeout_failure:
+        recommendations.append("Target timed out; retry later or use an alternate mirror/domain")
+    if unreachable and not recommendations:
+        recommendations.append("Target was unreachable for active crawl; rely on URL/history intel fallback")
+
+    return {
+        "method": crawl_method,
+        "unreachable": unreachable,
+        "playwrightMissing": playwright_missing,
+        "dnsFailure": dns_failure,
+        "timeout": timeout_failure,
+        "likelyCause": likely_cause,
+        "recommendations": recommendations,
+    }
+
+
 def _heuristic_url_risk(url: str, domain: str) -> tuple[int, list[str]]:
     score, signals = 0, []
     ll = url.lower()
@@ -287,7 +339,7 @@ def _fill_and_analyze_forms(page, base_url: str) -> list[dict]:
 
 # ─── Chat / Telegram interaction ──────────────────────────────────────────────
 
-def _interact_with_chat_widget(page, persona: dict, max_exchanges: int = 4) -> list[dict]:
+def _interact_with_chat_widget(page, persona: dict, max_exchanges: int = CHAT_MAX_EXCHANGES) -> list[dict]:
     """
     Detect live chat widgets (Tawk, Intercom, Crisp, custom) and send
     persona messages. Capture each scammer reply.
@@ -326,7 +378,7 @@ def _interact_with_chat_widget(page, persona: dict, max_exchanges: int = 4) -> l
             chat_input.fill(msg)
             page.wait_for_timeout(300 + int(len(msg) * 12))  # realistic typing delay
             chat_input.press("Enter")
-            page.wait_for_timeout(3000)  # wait for reply
+            page.wait_for_timeout(CHAT_REPLY_WAIT_MS)  # wait for reply
 
             # Scrape latest reply
             reply_text = ""
@@ -392,8 +444,8 @@ def _crawl_with_playwright(url: str, persona: dict) -> dict[str, Any]:
         redirects = []
         page.on("response", lambda r: redirects.append(r.url) if r.status in (301, 302, 303, 307, 308) else None)
 
-        page.goto(url, wait_until="domcontentloaded", timeout=25000)
-        page.wait_for_timeout(2000)
+        page.goto(url, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAV_TIMEOUT_MS)
+        page.wait_for_timeout(PLAYWRIGHT_POST_LOAD_WAIT_MS)
 
         screenshot_initial = _screenshot_b64(page)
 
@@ -442,9 +494,15 @@ def _crawl_with_playwright(url: str, persona: dict) -> dict[str, Any]:
 
 def _crawl_with_requests(url: str) -> dict[str, Any]:
     last_error: Exception | None = None
-    for candidate in _url_candidates(url):
+    attempted = 0
+    for candidate in _url_candidates(url)[:MAX_REQUEST_CANDIDATES]:
+        attempted += 1
         try:
-            r = requests.get(candidate, timeout=20, headers={"User-Agent": "Mozilla/5.0"})
+            r = requests.get(
+                candidate,
+                timeout=(REQUEST_CONNECT_TIMEOUT_S, REQUEST_READ_TIMEOUT_S),
+                headers={"User-Agent": "Mozilla/5.0"},
+            )
             html = r.text or ""
             links = re.findall(r"href=[\"']([^\"'#]+)", html, re.IGNORECASE)
             scripts = re.findall(r"<script[^>]*>([\s\S]*?)</script>", html, flags=re.IGNORECASE)
@@ -460,6 +518,7 @@ def _crawl_with_requests(url: str) -> dict[str, Any]:
                     f"HTTP {r.status_code}",
                     f"Requested URL: {candidate}",
                     f"Final URL: {r.url}",
+                    f"Request attempts: {attempted}/{MAX_REQUEST_CANDIDATES}",
                     f"Links: {len(links)}",
                 ],
             }
@@ -605,6 +664,8 @@ def run_honeytrap_bot(url: str, persona_key: str = "elderly_victim", persona_pro
     if persona_prompt:
         evidence.append(f"Custom persona: {persona_prompt[:120]}")
 
+    crawl_diagnostics = _build_crawl_diagnostics(crawl_method, crawl_failures)
+
     # ── Session hash (for deduplication + DB storage) ──────────────────────────
     session_id = hashlib.sha256(f"{normalized}{time.time()}".encode()).hexdigest()[:16]
 
@@ -646,6 +707,7 @@ def run_honeytrap_bot(url: str, persona_key: str = "elderly_victim", persona_pro
         # Meta
         "persona":             persona["name"],
         "evidence":            evidence,
+        "crawlDiagnostics":    crawl_diagnostics,
         "urlAnalysis":         url_result,
     }
 

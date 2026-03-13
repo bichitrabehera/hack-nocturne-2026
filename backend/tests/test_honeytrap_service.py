@@ -144,6 +144,38 @@ def test_honeytrap_uses_external_domains_when_no_onchain_network(monkeypatch):
     assert any("External domains observed:" in line for line in result["evidence"])
 
 
+def test_honeytrap_crawl_diagnostics_for_playwright_and_dns_failures(monkeypatch):
+    monkeypatch.setattr(
+        hs,
+        "_crawl_with_playwright",
+        lambda url, persona: (_ for _ in ()).throw(ModuleNotFoundError("No module named 'playwright'")),
+    )
+    monkeypatch.setattr(
+        hs,
+        "_crawl_with_requests",
+        lambda url: (_ for _ in ()).throw(RuntimeError("NameResolutionError: Failed to resolve target")),
+    )
+    monkeypatch.setattr(hs, "analyze_url", lambda url: {"status": "safe", "score": 0, "signals": []})
+    monkeypatch.setattr(
+        hs,
+        "get_honeytrap_network_stats",
+        lambda wallets, telegram_ids, domain: {
+            "connectedDomains": 0,
+            "sharedWallets": 0,
+            "activeCampaign": False,
+        },
+    )
+
+    result = hs.run_honeytrap_bot("https://www.pagarcelsia.st/")
+    diagnostics = result["crawlDiagnostics"]
+
+    assert diagnostics["unreachable"] is True
+    assert diagnostics["playwrightMissing"] is True
+    assert diagnostics["dnsFailure"] is True
+    assert diagnostics["likelyCause"] == "playwright_missing_and_dns_failure"
+    assert diagnostics["recommendations"]
+
+
 def test_url_candidates_include_scheme_and_www_variants():
     variants = hs._url_candidates("https://target.example/login")
 

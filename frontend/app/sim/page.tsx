@@ -34,16 +34,41 @@ interface HoneytrapIntel {
   intelId: number;
   url: string;
   domain: string;
+  pageTitle?: string;
   domainRisk: number;
   scamNetworkRisk: number;
+  urlModelScore?: number;
+  urlModelStatus?: string;
   connectedDomains: number;
   sharedWallets: number;
   activeCampaign: boolean;
   wallets: string[];
   telegramIds: string[];
   emails: string[];
+  phones?: string[];
   paymentInstructions: string[];
+  formIntel?: Array<{ action?: string; method?: string; suspicious?: boolean }>;
+  chatExchanges?: Array<{ sent?: string; received?: string }>;
+  chatWidgetsFound?: string[];
+  redirectsDetected?: string[];
   evidence: string[];
+  history?: {
+    samples: number;
+    wallets: string[];
+    telegramIds: string[];
+    emails: string[];
+    paymentInstructions: string[];
+    latestCapturedAt?: string | null;
+  };
+  crawlDiagnostics?: {
+    method?: string;
+    unreachable?: boolean;
+    playwrightMissing?: boolean;
+    dnsFailure?: boolean;
+    timeout?: boolean;
+    likelyCause?: string;
+    recommendations?: string[];
+  };
   walletBlockchainReport?: {
     attempted: boolean;
     submitted: boolean;
@@ -51,7 +76,19 @@ interface HoneytrapIntel {
     wallet: string | null;
     txHash: string | null;
     textHash: string | null;
+    error?: string | null;
   };
+}
+
+interface HoneytrapIntelRow {
+  id: number;
+  domain: string;
+  wallets: string[];
+  telegramIds: string[];
+  emails: string[];
+  paymentInstructions: string[];
+  evidence: string[];
+  createdAt?: string;
 }
 
 const INITIAL_SIM: SimState = {
@@ -74,15 +111,53 @@ const INITIAL_SIM: SimState = {
 function analyzeURL(raw: string): AnalysisResult {
   let url = raw.trim().toLowerCase();
   if (!url.startsWith("http")) url = "https://" + url;
-  let hostname = "";
+
+  let parsed: URL | null = null;
   try {
-    hostname = new URL(url).hostname;
+    parsed = new URL(url);
   } catch {
-    hostname = url;
+    parsed = null;
   }
 
+  const hostname = parsed?.hostname || url;
+  const pathAndQuery = `${parsed?.pathname || ""}${parsed?.search || ""}`;
+  const fullTarget = `${hostname}${pathAndQuery}`;
+
   const indicators: string[] = [];
+  const addSignal = (label: string, points: number) => {
+    indicators.push(label);
+    score += points;
+  };
+
+  const fingerprintBucket = (value: string, modulo: number) => {
+    let hash = 0;
+    for (let i = 0; i < value.length; i++) {
+      hash = (hash * 31 + value.charCodeAt(i)) >>> 0;
+    }
+    return hash % modulo;
+  };
+
   let score = 0;
+  const attackVotes: Record<AttackType, number> = {
+    phishing: 0,
+    drainer: 0,
+    prize: 0,
+    malware: 0,
+    unknown: 0,
+  };
+
+  const trustedDomains = [
+    "google.com",
+    "youtube.com",
+    "github.com",
+    "microsoft.com",
+    "apple.com",
+    "amazon.com",
+    "openai.com",
+  ];
+  const isTrusted = trustedDomains.some(
+    (domain) => hostname === domain || hostname.endsWith(`.${domain}`),
+  );
 
   const TLDS = [
     ".tk",
@@ -95,20 +170,24 @@ function analyzeURL(raw: string): AnalysisResult {
     ".ml",
     ".ga",
     ".pw",
+    ".shop",
+    ".vip",
   ];
   const tld = TLDS.find((t) => hostname.endsWith(t));
-  if (tld) {
-    score += 25;
-    indicators.push(`Suspicious TLD: ${tld}`);
-  }
+  if (tld) addSignal(`Suspicious TLD: ${tld}`, 24);
 
   const parts = hostname.split(".");
-  if (parts.length > 4) {
-    score += 15;
-    indicators.push(`Excessive subdomain depth`);
-  }
+  if (parts.length > 4) addSignal("Excessive subdomain depth", 15);
+  if (hostname.includes("xn--")) addSignal("Punycode domain obfuscation", 18);
+  if ((hostname.match(/-/g) || []).length >= 3)
+    addSignal("High hyphenated-domain entropy", 10);
 
-  const KW = [
+  if (/^\d{1,3}\.\d{1,3}/.test(hostname))
+    addSignal("IP address as hostname", 20);
+  if (hostname.length > 30)
+    addSignal(`Long hostname (${hostname.length} chars)`, 10);
+
+  const hostKeywords = [
     "secure-",
     "login-",
     "verify-",
@@ -116,11 +195,16 @@ function analyzeURL(raw: string): AnalysisResult {
     "alert-",
     "claim-",
     "support-",
+    "wallet-",
+    "airdrop-",
+    "bonus-",
   ];
-  const kw = KW.find((k) => hostname.includes(k));
-  if (kw) {
-    score += 20;
-    indicators.push(`Suspicious keyword: "${kw}"`);
+  const hostKw = hostKeywords.find((k) => hostname.includes(k));
+  if (hostKw) addSignal(`Suspicious keyword: "${hostKw}"`, 18);
+
+  const shorteners = ["bit.ly", "tinyurl.com", "t.co", "cutt.ly"];
+  if (shorteners.some((s) => hostname === s || hostname.endsWith(`.${s}`))) {
+    addSignal("URL shortener used", 12);
   }
 
   const BRANDS = [
@@ -137,57 +221,116 @@ function analyzeURL(raw: string): AnalysisResult {
   const brand = BRANDS.find(
     (b) =>
       hostname.includes(b) &&
-      !hostname.endsWith(b + ".com") &&
-      !hostname.endsWith(b + ".io"),
+      !hostname.endsWith(`${b}.com`) &&
+      !hostname.endsWith(`${b}.io`) &&
+      !hostname.endsWith(`${b}.org`),
   );
   if (brand) {
-    score += 30;
-    indicators.push(`Brand impersonation: "${brand}"`);
+    addSignal(`Brand impersonation: "${brand}"`, 28);
+    attackVotes.phishing += 2;
   }
 
-  if (/^\d{1,3}\.\d{1,3}/.test(hostname)) {
-    score += 20;
-    indicators.push("IP address as hostname");
-  }
-  if (hostname.length > 30) {
-    score += 10;
-    indicators.push(`Long hostname (${hostname.length} chars)`);
+  if (/login|signin|auth|password|verify|recover/.test(pathAndQuery)) {
+    addSignal("Credential capture path pattern", 14);
+    attackVotes.phishing += 2;
   }
 
-  let attackType: AttackType = "unknown";
+  if (/wallet|seed.?phrase|mnemonic|private.?key|passphrase/.test(fullTarget)) {
+    addSignal("Wallet credential phishing pattern", 26);
+    attackVotes.phishing += 3;
+  }
 
-  if (/metamask|wallet.*unlock|seed.?phrase|mnemonic|private.?key/.test(url)) {
-    attackType = "phishing";
-    score += 35;
-    indicators.push("Credential phishing pattern");
-  } else if (
-    /airdrop|claim.*eth|free.*token|waveswap|defi.*connect|setapproval/.test(
-      url,
+  if (
+    /airdrop|claim|free.?token|setapproval|approve|connect.?wallet/.test(
+      fullTarget,
     )
   ) {
-    attackType = "drainer";
-    score += 35;
-    indicators.push("Crypto drainer pattern");
-  } else if (
-    /winner|prize|congratul|claim.*now|you.*won|lucky.*visitor/.test(url)
-  ) {
-    attackType = "prize";
-    score += 30;
-    indicators.push("Fake prize/giveaway pattern");
-  } else if (
-    /download|update.*exe|patch|install.*setup|critical.*update/.test(url)
-  ) {
-    attackType = "malware";
-    score += 30;
-    indicators.push("Malware distribution pattern");
+    addSignal("Crypto drainer flow pattern", 24);
+    attackVotes.drainer += 3;
   }
 
-  if (attackType === "unknown" && score > 25) attackType = "phishing";
+  if (
+    /winner|prize|congratul|you.?won|lucky.?visitor|gift.?card/.test(fullTarget)
+  ) {
+    addSignal("Fake prize / giveaway pattern", 22);
+    attackVotes.prize += 3;
+  }
+
+  if (
+    /download|setup|update|patch|installer|\.exe(\?|$)|\.msi(\?|$)|\.zip(\?|$)/.test(
+      fullTarget,
+    )
+  ) {
+    addSignal("Malware delivery pattern", 24);
+    attackVotes.malware += 3;
+  }
+
+  if (!isTrusted && score < 15) {
+    addSignal("Low-trust external domain", 15);
+  }
 
   score = Math.min(score, 100);
+
+  const topAttack = (Object.entries(attackVotes)
+    .filter(([k]) => k !== "unknown")
+    .sort((a, b) => b[1] - a[1])[0] || ["unknown", 0]) as [AttackType, number];
+
+  let attackType: AttackType = topAttack[1] > 0 ? topAttack[0] : "unknown";
+  if (attackType === "unknown" && score >= 45) attackType = "phishing";
+
+  if (attackType === "unknown") {
+    const tokenFamilies: Array<{
+      type: Exclude<AttackType, "unknown">;
+      regex: RegExp;
+      label: string;
+    }> = [
+      {
+        type: "phishing",
+        regex:
+          /login|signin|auth|password|verify|recover|support|account|security/i,
+        label: "Pattern family: credential phishing",
+      },
+      {
+        type: "drainer",
+        regex: /wallet|airdrop|claim|token|dex|swap|staking|bridge|mint|nft/i,
+        label: "Pattern family: crypto drainer",
+      },
+      {
+        type: "prize",
+        regex: /winner|prize|bonus|reward|gift|lottery|jackpot|promo|coupon/i,
+        label: "Pattern family: fake prize",
+      },
+      {
+        type: "malware",
+        regex:
+          /download|setup|update|patch|installer|driver|antivirus|cleaner|optimi[sz]er/i,
+        label: "Pattern family: malware delivery",
+      },
+    ];
+
+    const matchedFamily = tokenFamilies.find((f) => f.regex.test(fullTarget));
+    if (matchedFamily) {
+      attackType = matchedFamily.type;
+      score = Math.max(score, 28);
+      indicators.push(matchedFamily.label);
+    } else if (!isTrusted) {
+      const families: Exclude<AttackType, "unknown">[] = [
+        "phishing",
+        "drainer",
+        "prize",
+        "malware",
+      ];
+      const chosen =
+        families[fingerprintBucket(fullTarget || hostname, families.length)];
+      attackType = chosen;
+      score = Math.max(score, 22);
+      indicators.push(`URL fingerprint mapped to ${chosen} simulation profile`);
+    }
+  }
+
   const confidence = Math.min(
-    Math.round(score * 0.88 + Math.random() * 12),
-    100,
+    99,
+    Math.max(6, Math.round(score * 0.82 + indicators.length * 4)),
   );
 
   const WHAT: Record<AttackType, string> = {
@@ -200,7 +343,7 @@ function analyzeURL(raw: string): AnalysisResult {
     malware:
       "AsyncRAT keylogger installed. Captures every keystroke, banking session, clipboard. Access sold to botnet for $15.",
     unknown:
-      "Suspicious URL — exact attack vector unclear. Indicators suggest potential malicious intent.",
+      "URL-only analysis found suspicious traits, but the exact exploit path is uncertain. Run Honeytrap deep crawl for concrete artifacts (wallets, contacts, payment instructions).",
   };
 
   return {
@@ -260,6 +403,10 @@ function InterceptScreen({
   result: AnalysisResult;
   onReset: () => void;
 }) {
+  const isBlocked = result.riskScore >= 30;
+  const attackLabel =
+    result.attackType === "unknown" ? "under_investigation" : result.attackType;
+
   return (
     <div
       className="absolute inset-0 z-50 flex flex-col items-center justify-center p-8 text-center"
@@ -272,11 +419,23 @@ function InterceptScreen({
         🛡️
       </div>
       <h2 className="text-[#00e5ff] font-extrabold text-3xl tracking-tight mb-1">
-        ScamShield Blocked This
+        {isBlocked ? "ScamShield Blocked This" : "ScamShield Flagged This"}
       </h2>
       <p className="text-[#5a7a99] font-mono text-xs mb-6">
-        community-reported · {result.attackType} · risk {result.riskScore}/100
+        community-reported · {attackLabel} · risk {result.riskScore}/100
       </p>
+
+      {!isBlocked && (
+        <div className="bg-[#00e5ff]/8 border border-[#00e5ff]/25 rounded-xl p-3 mb-4 text-left max-w-lg w-full">
+          <p className="text-[#00e5ff] font-bold text-xs uppercase tracking-wider mb-1">
+            Preliminary URL heuristic result
+          </p>
+          <p className="text-[#9dd8ff] font-mono text-xs leading-relaxed">
+            This verdict is based on URL traits only. Use Honeytrap for deeper
+            content interaction and stronger evidence.
+          </p>
+        </div>
+      )}
 
       <div className="flex gap-3 mb-5 flex-wrap justify-center">
         {[
@@ -923,6 +1082,10 @@ export default function AttackSimulator() {
   const [honeytrapIntel, setHoneytrapIntel] = useState<HoneytrapIntel | null>(
     null,
   );
+  const [honeytrapHistory, setHoneytrapHistory] = useState<HoneytrapIntelRow[]>(
+    [],
+  );
+  const [honeytrapPreviewStep, setHoneytrapPreviewStep] = useState(0);
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const ticker = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -936,6 +1099,15 @@ export default function AttackSimulator() {
   }, []);
 
   useEffect(() => () => clear(), [clear]);
+
+  useEffect(() => {
+    if (!honeytrapLoading) return;
+    setHoneytrapPreviewStep(0);
+    const interval = setInterval(() => {
+      setHoneytrapPreviewStep((current) => Math.min(current + 1, 5));
+    }, 950);
+    return () => clearInterval(interval);
+  }, [honeytrapLoading]);
 
   const after = (ms: number, fn: () => void) => {
     const t = setTimeout(fn, ms);
@@ -1086,6 +1258,8 @@ export default function AttackSimulator() {
     }
 
     setHoneytrapError("");
+    setHoneytrapHistory([]);
+    setHoneytrapPreviewStep(0);
     setHoneytrapLoading(true);
     try {
       const res = await fetch(`${API_BASE}/honeytrap/run`, {
@@ -1099,6 +1273,22 @@ export default function AttackSimulator() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.detail || "Honeytrap request failed");
       setHoneytrapIntel(data);
+
+      const domainForLookup = (data?.domain || "")
+        .toString()
+        .toLowerCase()
+        .replace(/^www\./, "");
+      if (domainForLookup) {
+        const intelRes = await fetch(
+          `${API_BASE}/honeytrap/intel?limit=12&domain=${encodeURIComponent(domainForLookup)}`,
+        );
+        if (intelRes.ok) {
+          const intelData = await intelRes.json();
+          if (Array.isArray(intelData)) {
+            setHoneytrapHistory(intelData as HoneytrapIntelRow[]);
+          }
+        }
+      }
     } catch (error) {
       setHoneytrapError(
         error instanceof Error ? error.message : "Honeytrap request failed",
@@ -1161,6 +1351,15 @@ export default function AttackSimulator() {
   const dlClick = () => {
     if (sim.phase === "idle") run();
   };
+
+  const HONEYTRAP_STEPS = [
+    "Queueing investigation",
+    "Opening target URL",
+    "Extracting wallets/contacts",
+    "Scoring domain & network",
+    "Persisting intel",
+    "Preparing response",
+  ];
 
   return (
     <div
@@ -1355,6 +1554,63 @@ export default function AttackSimulator() {
             </button>
           </div>
 
+          {(honeytrapLoading || honeytrapIntel) && (
+            <div className="mb-4 rounded-lg border border-[#1e2a38] bg-white/5 p-3">
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <div className="text-[#00e5ff] text-xs font-semibold">
+                  Honeytrap Activity Preview
+                </div>
+                <div className="text-[#5a7a99] text-[10px] font-mono">
+                  {honeytrapLoading ? "live" : "last run"}
+                </div>
+              </div>
+
+              <div className="h-1.5 rounded-full bg-[#1e2a38] overflow-hidden mb-3">
+                <div
+                  className="h-full bg-[#00e5ff] transition-all duration-500"
+                  style={{
+                    width: `${honeytrapLoading ? ((honeytrapPreviewStep + 1) / HONEYTRAP_STEPS.length) * 100 : 100}%`,
+                  }}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                {HONEYTRAP_STEPS.map((step, idx) => {
+                  const done = honeytrapLoading
+                    ? idx < honeytrapPreviewStep
+                    : true;
+                  const active =
+                    honeytrapLoading && idx === honeytrapPreviewStep;
+                  return (
+                    <div
+                      key={step}
+                      className={`font-mono text-[11px] ${
+                        active
+                          ? "text-[#00e5ff]"
+                          : done
+                            ? "text-[#a7f3d0]"
+                            : "text-[#5a7a99]"
+                      }`}
+                    >
+                      {active ? "▸" : done ? "✓" : "•"} {step}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {!honeytrapLoading && honeytrapIntel?.evidence?.length ? (
+                <div className="mt-3 border-t border-[#1e2a38] pt-2">
+                  <div className="text-[#ffb800] text-[10px] uppercase mb-1">
+                    Snapshot
+                  </div>
+                  <div className="font-mono text-[11px] text-[#5a7a99] break-all">
+                    {(honeytrapIntel.evidence || [])[0]}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          )}
+
           {honeytrapError && (
             <div className="mb-4 text-red-400 text-xs font-mono border border-red-500/30 bg-red-500/5 rounded-lg p-2">
               {honeytrapError}
@@ -1363,6 +1619,41 @@ export default function AttackSimulator() {
 
           {honeytrapIntel && (
             <div className="space-y-4">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="rounded-lg border border-[#1e2a38] p-2">
+                  <div className="text-[#5a7a99] text-[10px] uppercase">
+                    URL Model
+                  </div>
+                  <div className="text-[#93c5fd] font-mono font-bold text-sm uppercase">
+                    {honeytrapIntel.urlModelStatus || "unknown"}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-[#1e2a38] p-2">
+                  <div className="text-[#5a7a99] text-[10px] uppercase">
+                    URL Model Score
+                  </div>
+                  <div className="text-[#93c5fd] font-mono font-bold text-lg">
+                    {honeytrapIntel.urlModelScore ?? 0}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-[#1e2a38] p-2">
+                  <div className="text-[#5a7a99] text-[10px] uppercase">
+                    Forms Seen
+                  </div>
+                  <div className="text-[#00e5ff] font-mono font-bold text-lg">
+                    {honeytrapIntel.formIntel?.length ?? 0}
+                  </div>
+                </div>
+                <div className="rounded-lg border border-[#1e2a38] p-2">
+                  <div className="text-[#5a7a99] text-[10px] uppercase">
+                    Chat Exchanges
+                  </div>
+                  <div className="text-[#00e5ff] font-mono font-bold text-lg">
+                    {honeytrapIntel.chatExchanges?.length ?? 0}
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
                 <div className="rounded-lg border border-[#1e2a38] p-2">
                   <div className="text-[#5a7a99] text-[10px] uppercase">
@@ -1484,6 +1775,187 @@ export default function AttackSimulator() {
                 </div>
               </div>
 
+              <div className="grid md:grid-cols-2 gap-3">
+                <div className="rounded-lg border border-[#1e2a38] p-3">
+                  <div className="text-[#ffb800] text-xs font-semibold mb-1">
+                    Phones / WhatsApp
+                  </div>
+                  {(honeytrapIntel.phones || []).length ? (
+                    (honeytrapIntel.phones || []).map((phone) => (
+                      <div
+                        key={phone}
+                        className="font-mono text-[11px] text-[#d8b4fe]"
+                      >
+                        {phone}
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-[#5a7a99] text-xs">None detected</div>
+                  )}
+                </div>
+                <div className="rounded-lg border border-[#1e2a38] p-3">
+                  <div className="text-[#ffb800] text-xs font-semibold mb-1">
+                    Crawl Metadata
+                  </div>
+                  <div className="text-[#5a7a99] text-xs">
+                    Domain: {honeytrapIntel.domain}
+                  </div>
+                  <div className="text-[#5a7a99] text-xs break-all">
+                    URL: {honeytrapIntel.url}
+                  </div>
+                  {honeytrapIntel.pageTitle && (
+                    <div className="text-[#5a7a99] text-xs">
+                      Title: {honeytrapIntel.pageTitle}
+                    </div>
+                  )}
+                  <div className="text-[#5a7a99] text-xs">
+                    Method:{" "}
+                    {honeytrapIntel.evidence
+                      .find((line) => line.startsWith("Crawler:"))
+                      ?.replace("Crawler:", "")
+                      .trim() || "unknown"}
+                  </div>
+                </div>
+              </div>
+
+              {!!honeytrapHistory.length && (
+                <div className="rounded-lg border border-[#1e2a38] p-3 bg-white/5">
+                  <div className="text-[#00e5ff] text-xs font-semibold mb-2">
+                    Historical Intel (same domain)
+                  </div>
+                  <div className="text-[#5a7a99] text-xs mb-2">
+                    Samples: {honeytrapHistory.length}
+                    {honeytrapIntel.history?.latestCapturedAt
+                      ? ` · latest: ${honeytrapIntel.history.latestCapturedAt}`
+                      : ""}
+                  </div>
+                  <div className="grid md:grid-cols-2 gap-3">
+                    <div>
+                      <div className="text-[#ffb800] text-xs mb-1">
+                        Recovered wallets
+                      </div>
+                      {(honeytrapIntel.history?.wallets || []).length ? (
+                        (honeytrapIntel.history?.wallets || []).map(
+                          (wallet) => (
+                            <div
+                              key={wallet}
+                              className="font-mono text-[11px] text-[#fca5a5] break-all"
+                            >
+                              {wallet}
+                            </div>
+                          ),
+                        )
+                      ) : (
+                        <div className="text-[#5a7a99] text-xs">
+                          None in history
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <div className="text-[#ffb800] text-xs mb-1">
+                        Recovered contacts
+                      </div>
+                      {[
+                        ...(honeytrapIntel.history?.telegramIds || []),
+                        ...(honeytrapIntel.history?.emails || []),
+                      ].length ? (
+                        [
+                          ...(honeytrapIntel.history?.telegramIds || []),
+                          ...(honeytrapIntel.history?.emails || []),
+                        ].map((item) => (
+                          <div
+                            key={item}
+                            className="font-mono text-[11px] text-[#93c5fd] break-all"
+                          >
+                            {item}
+                          </div>
+                        ))
+                      ) : (
+                        <div className="text-[#5a7a99] text-xs">
+                          None in history
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {honeytrapIntel.crawlDiagnostics && (
+                <div className="rounded-lg border border-[#1e2a38] p-3 bg-white/5">
+                  <div className="text-[#00e5ff] text-xs font-semibold mb-2">
+                    Crawl Diagnostics
+                  </div>
+                  <div className="grid sm:grid-cols-2 gap-2 mb-2">
+                    <div className="text-[#5a7a99] text-xs">
+                      Method:{" "}
+                      {honeytrapIntel.crawlDiagnostics.method || "unknown"}
+                    </div>
+                    <div className="text-[#5a7a99] text-xs break-all">
+                      Cause:{" "}
+                      {honeytrapIntel.crawlDiagnostics.likelyCause || "none"}
+                    </div>
+                    <div className="text-[#5a7a99] text-xs">
+                      unreachable:{" "}
+                      {String(
+                        Boolean(honeytrapIntel.crawlDiagnostics.unreachable),
+                      )}
+                    </div>
+                    <div className="text-[#5a7a99] text-xs">
+                      playwrightMissing:{" "}
+                      {String(
+                        Boolean(
+                          honeytrapIntel.crawlDiagnostics.playwrightMissing,
+                        ),
+                      )}
+                    </div>
+                    <div className="text-[#5a7a99] text-xs">
+                      dnsFailure:{" "}
+                      {String(
+                        Boolean(honeytrapIntel.crawlDiagnostics.dnsFailure),
+                      )}
+                    </div>
+                    <div className="text-[#5a7a99] text-xs">
+                      timeout:{" "}
+                      {String(Boolean(honeytrapIntel.crawlDiagnostics.timeout))}
+                    </div>
+                  </div>
+                  {(honeytrapIntel.crawlDiagnostics.recommendations || [])
+                    .length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-[#ffb800] text-xs font-semibold">
+                        Recommendations
+                      </div>
+                      {(
+                        honeytrapIntel.crawlDiagnostics.recommendations || []
+                      ).map((tip, idx) => (
+                        <div
+                          key={`${idx}-${tip}`}
+                          className="font-mono text-[11px] text-[#a7f3d0] break-all"
+                        >
+                          • {tip}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              <div className="rounded-lg border border-[#1e2a38] p-3">
+                <div className="text-[#00e5ff] text-xs font-semibold mb-1">
+                  Evidence Log
+                </div>
+                <div className="max-h-36 overflow-auto space-y-1">
+                  {(honeytrapIntel.evidence || []).map((line, idx) => (
+                    <div
+                      key={`${idx}-${line}`}
+                      className="font-mono text-[11px] text-[#5a7a99] break-all"
+                    >
+                      • {line}
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               {honeytrapIntel.walletBlockchainReport && (
                 <div className="rounded-lg border border-[#1e2a38] p-3 bg-white/5">
                   <div className="text-[#00e5ff] text-xs font-semibold mb-1">
@@ -1506,6 +1978,11 @@ export default function AttackSimulator() {
                   {honeytrapIntel.walletBlockchainReport.txHash && (
                     <div className="font-mono text-[11px] text-[#93c5fd] break-all mt-1">
                       tx: {honeytrapIntel.walletBlockchainReport.txHash}
+                    </div>
+                  )}
+                  {honeytrapIntel.walletBlockchainReport.error && (
+                    <div className="font-mono text-[11px] text-red-400 break-all mt-1">
+                      error: {honeytrapIntel.walletBlockchainReport.error}
                     </div>
                   )}
                 </div>

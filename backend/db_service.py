@@ -118,20 +118,41 @@ def _json_loads(value: str) -> list[str]:
     return parsed if isinstance(parsed, list) else []
 
 
-def get_honeytrap_intel(limit: int = 30) -> list[dict]:
+def _normalize_domain(domain: str) -> str:
+    return domain.strip().lower().removeprefix("www.")
+
+
+def get_honeytrap_intel(limit: int = 30, domain: str | None = None) -> list[dict]:
+    normalized_domain = _normalize_domain(domain) if domain else ""
+
     with _connect() as connection:
-        rows = connection.execute(
-            """
-            SELECT id, url, domain, domain_risk, scam_network_risk,
-                   connected_domains, shared_wallets, active_campaign,
-                   wallets_json, telegram_json, emails_json, payment_json,
-                   evidence_json, created_at
-            FROM honeytrap_intel
-            ORDER BY id DESC
-            LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+        if normalized_domain:
+            rows = connection.execute(
+                """
+                SELECT id, url, domain, domain_risk, scam_network_risk,
+                       connected_domains, shared_wallets, active_campaign,
+                       wallets_json, telegram_json, emails_json, payment_json,
+                       evidence_json, created_at
+                FROM honeytrap_intel
+                WHERE domain = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (normalized_domain, limit),
+            ).fetchall()
+        else:
+            rows = connection.execute(
+                """
+                SELECT id, url, domain, domain_risk, scam_network_risk,
+                       connected_domains, shared_wallets, active_campaign,
+                       wallets_json, telegram_json, emails_json, payment_json,
+                       evidence_json, created_at
+                FROM honeytrap_intel
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
 
     return [
         {

@@ -34,6 +34,21 @@ logger = logging.getLogger(__name__)
 AUTO_REPORT_URL_STATUSES = {"high_risk", "scam"}
 
 
+def _dedupe_strings(values: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        item = (value or "").strip()
+        if not item:
+            continue
+        key = item.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(item)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Lifespan — pre-warm DistilBERT on startup, clean up on shutdown
 # ---------------------------------------------------------------------------
@@ -461,6 +476,7 @@ async def run_honeytrap(req: HoneytrapRequest):
             "txHash": None,
             "textHash": None,
             "alreadyReported": False,
+            "error": None,
         }
 
         if result.get("wallets"):
@@ -472,25 +488,41 @@ async def run_honeytrap(req: HoneytrapRequest):
                 "textHash": wallet_hash,
             })
 
-            existing = check_hash(wallet_hash)
-            if existing.get("exists"):
-                wallet_report["alreadyReported"] = True
-            else:
-                tx_hash = submit_report(
-                    text=wallet,
-                    category="phishing",
-                    risk_score=max(70, int(result.get("domainRisk", 0))),
-                    actual_reporter=None,
-                )
-                wallet_report["submitted"] = True
-                wallet_report["txHash"] = tx_hash
+            try:
+                existing = check_hash(wallet_hash)
+                if existing.get("exists"):
+                    wallet_report["alreadyReported"] = True
+                else:
+                    tx_hash = submit_report(
+                        text=wallet,
+                        category="phishing",
+                        risk_score=max(70, int(result.get("domainRisk", 0))),
+                        actual_reporter=None,
+                    )
+                    wallet_report["submitted"] = True
+                    wallet_report["txHash"] = tx_hash
+            except Exception as blockchain_error:
+                wallet_report["error"] = str(blockchain_error)
 
         intel_id = save_honeytrap_intel(result)
+        history_rows = get_honeytrap_intel(limit=10, domain=result.get("domain"))
+        history_wallets = _dedupe_strings([w for row in history_rows for w in row.get("wallets", [])])
+        history_telegram = _dedupe_strings([t for row in history_rows for t in row.get("telegramIds", [])])
+        history_emails = _dedupe_strings([e for row in history_rows for e in row.get("emails", [])])
+        history_payments = _dedupe_strings([p for row in history_rows for p in row.get("paymentInstructions", [])])
 
         return {
             "intelId": intel_id,
             **result,
             "walletBlockchainReport": wallet_report,
+            "history": {
+                "samples": len(history_rows),
+                "wallets": history_wallets[:8],
+                "telegramIds": history_telegram[:8],
+                "emails": history_emails[:8],
+                "paymentInstructions": history_payments[:8],
+                "latestCapturedAt": history_rows[0].get("createdAt") if history_rows else None,
+            },
         }
     except EnvironmentError as e:
         raise HTTPException(status_code=503, detail=f"Blockchain not configured yet: {e}")
@@ -499,10 +531,11 @@ async def run_honeytrap(req: HoneytrapRequest):
 
 
 @app.get("/api/honeytrap/intel")
-async def honeytrap_intel(limit: int = 20):
+async def honeytrap_intel(limit: int = 20, domain: str = ""):
     try:
         safe_limit = max(1, min(limit, 100))
-        return get_honeytrap_intel(safe_limit)
+        normalized_domain = domain.strip().lower().removeprefix("www.")
+        return get_honeytrap_intel(safe_limit, domain=normalized_domain or None)
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Failed to fetch honeytrap intel: {e}")
 
