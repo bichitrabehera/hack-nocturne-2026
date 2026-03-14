@@ -84,11 +84,11 @@ function errorResponse(
   message: string,
   status: number,
 ) {
-  const body: z.infer<typeof ErrorResponseSchema> = {
+  const body = ErrorResponseSchema.parse({
     ok: false,
     error: message,
     code,
-  };
+  });
   return Response.json(body, { status });
 }
 
@@ -338,7 +338,7 @@ export async function POST(req: Request): Promise<Response> {
 
   const parsed = RequestSchema.safeParse(body);
   if (!parsed.success) {
-    const firstError = parsed.error.errors[0];
+    const firstError = parsed.error.issues[0];
     const code =
       firstError.path[0] === "url" && firstError.message.includes("required")
         ? "MISSING_URL"
@@ -380,7 +380,7 @@ export async function POST(req: Request): Promise<Response> {
       confidence: heuristic.confidence,
       indicators: heuristic.indicators,
     };
-    return Response.json(response);
+    return Response.json(SuccessResponseSchema.parse(response));
   }
 
   // 4. Low-confidence → call OpenAI for deeper analysis
@@ -436,7 +436,7 @@ Schema: { attackType, riskScore (0-100), confidence (0-100), indicators: string[
     };
 
     void sendDiscordAlert(url, merged);
-    return Response.json(merged);
+    return Response.json(SuccessResponseSchema.parse(merged));
   } catch (err) {
     // 6. OpenAI failed entirely — return heuristic as fallback, never 500
     console.error("[OpenAI] analysis failed:", err);
@@ -448,6 +448,6 @@ Schema: { attackType, riskScore (0-100), confidence (0-100), indicators: string[
       analysedAt,
       ...heuristic,
     };
-    return Response.json(fallback);
+    return Response.json(SuccessResponseSchema.parse(fallback));
   }
 }
