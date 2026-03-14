@@ -576,9 +576,9 @@ export default function Dashboard() {
                   itemStyle={{ color: "#ef4444" }}
                 />
                 <Bar dataKey="score" radius={[4, 4, 0, 0]}>
-                  {reports.map((r) => (
+                  {reports.map((r, idx) => (
                     <Cell
-                      key={r.id}
+                      key={`bar-${r.id}-${r.textHash || "no-hash"}-${r.timestamp || 0}-${idx}`}
                       fill={getRiskLevel(r.riskScore).color}
                       opacity={0.85}
                     />
@@ -868,9 +868,9 @@ export default function Dashboard() {
                     </p>
 
                     {/* Top indicator */}
-                    {d.indicators[0] && (
+                    {d.indicators?.[0] && (
                       <p className="text-[11px] text-slate-400 bg-slate-800/60 rounded px-2 py-1 mb-2 truncate">
-                        {d.indicators[0]}
+                        {d.indicators?.[0]}
                       </p>
                     )}
 
@@ -1133,11 +1133,11 @@ export default function Dashboard() {
                 No reports match filter
               </div>
             )}
-            {filtered.map((r) => {
+            {filtered.map((r, idx) => {
               const risk = getRiskLevel(r.riskScore);
               return (
                 <div
-                  key={r.id}
+                  key={`${r.id}-${r.textHash || "no-hash"}-${r.timestamp || 0}-${idx}`}
                   onClick={() => openReport(r.id)}
                   className="grid grid-cols-[52px_1fr_120px_130px_72px_80px_150px] items-center px-6 py-4 cursor-pointer transition-colors hover:bg-red-500/5"
                 >
