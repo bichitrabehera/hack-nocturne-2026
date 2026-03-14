@@ -985,7 +985,7 @@ export default function AttackSimulator() {
       className="min-h-screen text-white bg-gray-950"
       style={{ fontFamily: "'DM Sans',sans-serif" }}
     >
-      <Navbar/>
+      <Navbar />
       {/* Subtle grid */}
       <div
         className="fixed pt-20 inset-0 pointer-events-none"
@@ -1138,18 +1138,25 @@ export default function AttackSimulator() {
         )}
 
         {/* Indicators */}
-        {(result?.indicators?.length ?? 0) > 0 && (
-          <div className="mb-4 rounded-lg border border-gray-700 bg-white/5 p-3">
-            <div className="text-gray-500 text-[10px] uppercase mb-2">
-              Indicators ({result.indicators.length})
+        {(() => {
+          const indicators = result?.indicators ?? [];
+          if (indicators.length === 0) return null;
+          return (
+            <div className="mb-4 rounded-lg border border-gray-700 bg-white/5 p-3">
+              <div className="text-gray-500 text-[10px] uppercase mb-2">
+                Indicators ({indicators.length})
+              </div>
+              {indicators.map((item, index) => (
+                <p
+                  key={index}
+                  className="font-mono text-xs text-yellow-300 mb-1"
+                >
+                  • {item}
+                </p>
+              ))}
             </div>
-            {result!.indicators!.map((item, index) => (
-              <p key={index} className="font-mono text-xs text-yellow-300 mb-1">
-                • {item}
-              </p>
-            ))}
-          </div>
-        )}
+          );
+        })()}
 
         {/* Stage */}
         {result ? (
