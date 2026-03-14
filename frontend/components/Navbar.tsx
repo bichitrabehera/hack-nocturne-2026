@@ -16,14 +16,12 @@ const Navbar = () => {
           <a href="/dashboard" className="hover:text-white transition-colors">
             Dashboard
           </a>
-          <a
-            href="/dashboard#ai-hunt"
-            className="hover:text-cyan-300 transition-colors"
-          >
-            AI Hunt
-          </a>
+          
           <a href="/sim" className="hover:text-white transition-colors">
             Analytics
+          </a>
+          <a href="https://discord.gg/GqvQPuYp" className="hover:text-white transition-colors">
+            Join Discord
           </a>
         </div>
       </div>

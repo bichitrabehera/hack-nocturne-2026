@@ -1,6 +1,7 @@
 "use client";
 import Navbar from "@/components/Navbar";
 import { useState, useEffect, useRef, useCallback } from "react";
+import { useSearchParams } from "next/navigation";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -62,6 +63,8 @@ interface HoneytrapIntel {
   emails: string[];
   phones?: string[];
   paymentInstructions: string[];
+  behaviorSignals?: string[];
+  notablePageText?: string[];
   formIntel?: Array<{ action?: string; method?: string; suspicious?: boolean }>;
   chatExchanges?: Array<{ sent?: string; received?: string }>;
   chatWidgetsFound?: string[];
@@ -654,7 +657,8 @@ function MalwareView({
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function AttackSimulator() {
-  const API_BASE = "https://hack-nocturne-2026-production.up.railway.app/api";
+  const searchParams = useSearchParams();
+  const API_BASE = "/api";
   const [urlInput, setUrlInput] = useState("");
   const [displayUrl, setDisplayUrl] = useState("");
   const [result, setResult] = useState<AnalysisResult | null>(null);
@@ -673,6 +677,7 @@ export default function AttackSimulator() {
   const [error, setError] = useState("");
   const timers = useRef<ReturnType<typeof setTimeout>[]>([]);
   const ticker = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoHoneytrapTriggered = useRef(false);
 
   const clear = useCallback(() => {
     timers.current.forEach(clearTimeout);
@@ -747,6 +752,15 @@ export default function AttackSimulator() {
 
   const run = () => {
     if (!result) return;
+    const shouldIntercept =
+      result.riskScore >= 30 ||
+      (result.attackType !== "unknown" && result.riskScore >= 15);
+
+    if (!shouldIntercept) {
+      patch({ phase: "idle", statusText: "No high-risk behavior detected" });
+      return;
+    }
+
     patch({ phase: "running" });
 
     if (result.attackType === "phishing") {
@@ -886,7 +900,7 @@ export default function AttackSimulator() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           url: target,
-          persona: "I'm new to crypto and want to claim the airdrop",
+          persona: "auto",
         }),
       });
       const data = await res.json();
@@ -916,6 +930,26 @@ export default function AttackSimulator() {
       setHoneytrapLoading(false);
     }
   };
+
+  useEffect(() => {
+    const incomingUrl = (searchParams.get("url") || "").trim();
+    if (!incomingUrl) return;
+
+    setUrlInput(incomingUrl);
+    setDisplayUrl(incomingUrl);
+    setHoneytrapUrl(incomingUrl);
+
+    const shouldAutoHoneytrap = searchParams.get("autoHoneytrap") === "1";
+    if (!shouldAutoHoneytrap || autoHoneytrapTriggered.current) return;
+
+    autoHoneytrapTriggered.current = true;
+    const timer = setTimeout(() => {
+      runHoneytrap();
+    }, 250);
+
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams]);
 
   const EXAMPLES = [
     { label: "Phishing", url: "http://meta-mask-secure-login.tk/unlock" },
@@ -1131,7 +1165,9 @@ export default function AttackSimulator() {
                 Impact Preview
               </div>
               <div className="text-[11px] text-gray-300 leading-relaxed">
-                {getImpactNarrative(result.attackType)}
+                {result.attackType === "unknown" && result.riskScore < 30
+                  ? "No high-risk exploit pattern was identified from URL-only analysis."
+                  : getImpactNarrative(result.attackType)}
               </div>
             </div>
           </div>
@@ -1176,7 +1212,9 @@ export default function AttackSimulator() {
                 <div className="w-full h-full flex flex-col items-center justify-center text-center p-10">
                   <div className="text-5xl mb-3 opacity-25">🔍</div>
                   <p className="text-gray-500 font-mono text-xs">
-                    Suspicious URL · {result.indicators.length} signals detected
+                    {result.riskScore >= 30
+                      ? `Suspicious URL · ${result.indicators.length} signals detected`
+                      : "No high-risk signals detected for this URL"}
                   </p>
                 </div>
               )}
@@ -1525,6 +1563,42 @@ export default function AttackSimulator() {
                       .trim() || "unknown"}
                   </div>
                 </div>
+              </div>
+
+              <div className="rounded-lg border border-gray-700 p-3">
+                <div className="text-yellow-500 text-xs font-semibold mb-1">
+                  Script / Behavior Signals
+                </div>
+                {(honeytrapIntel.behaviorSignals || []).length ? (
+                  (honeytrapIntel.behaviorSignals || []).map((signal) => (
+                    <div
+                      key={signal}
+                      className="font-mono text-[11px] text-cyan-300"
+                    >
+                      • {signal}
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-gray-500 text-xs">None detected</div>
+                )}
+              </div>
+
+              <div className="rounded-lg border border-gray-700 p-3">
+                <div className="text-yellow-500 text-xs font-semibold mb-1">
+                  Notable Page Text
+                </div>
+                {(honeytrapIntel.notablePageText || []).length ? (
+                  (honeytrapIntel.notablePageText || []).map((line, idx) => (
+                    <div
+                      key={`${idx}-${line}`}
+                      className="font-mono text-[11px] text-yellow-200"
+                    >
+                      • {line}
+                    </div>
+                  ))
+                ) : (
+                  <div className="text-gray-500 text-xs">None detected</div>
+                )}
               </div>
 
               {!!honeytrapHistory.length && (

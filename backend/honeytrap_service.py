@@ -18,6 +18,8 @@ import json
 import base64
 import hashlib
 import logging
+import subprocess
+import sys
 from typing import Any
 from urllib.parse import unquote, urlparse, urljoin
 
@@ -30,21 +32,36 @@ logger = logging.getLogger(__name__)
 
 PLAYWRIGHT_NAV_TIMEOUT_MS = 12_000
 PLAYWRIGHT_POST_LOAD_WAIT_MS = 800
+PLAYWRIGHT_DEEP_SCROLL_STEPS = 4
+PLAYWRIGHT_DEEP_SCROLL_WAIT_MS = 450
+PLAYWRIGHT_INTERACTION_MAX_CLICKS = 4
 CHAT_MAX_EXCHANGES = 2
 CHAT_REPLY_WAIT_MS = 1_200
 REQUEST_CONNECT_TIMEOUT_S = 4
 REQUEST_READ_TIMEOUT_S = 6
 MAX_REQUEST_CANDIDATES = 2
+PLAYWRIGHT_INSTALL_TIMEOUT_S = 180
 
 # ─── Regexes ──────────────────────────────────────────────────────────────────
 
 ETH_REGEX      = re.compile(r"\b0x[a-fA-F0-9]{40}\b")
 BTC_REGEX      = re.compile(r"\b(?:bc1|[13])[a-zA-HJ-NP-Z0-9]{25,62}\b")
 TRON_REGEX     = re.compile(r"\bT[1-9A-HJ-NP-Za-km-z]{33}\b")
-TELEGRAM_REGEX = re.compile(r"(?:t\.me/|telegram\.me/|@)([A-Za-z0-9_]{5,})")
+TELEGRAM_LINK_REGEX = re.compile(r"(?:t\.me/|telegram\.me/)([A-Za-z][A-Za-z0-9_]{4,31})", re.IGNORECASE)
+TELEGRAM_AT_REGEX = re.compile(r"(?:^|[^\w])@([A-Za-z][A-Za-z0-9_]{4,31})(?=\b)")
 EMAIL_REGEX    = re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b")
 PHONE_REGEX    = re.compile(r"\+?[1-9]\d{7,14}")
 WHATSAPP_REGEX = re.compile(r"(?:wa\.me/|whatsapp\.com/send\?phone=)(\d{7,15})")
+
+TELEGRAM_NOISE_TERMS = {
+    "keyframes", "supports", "media", "hover", "before", "after", "root", "webkit",
+}
+
+BTC_LEGACY_REGEX = re.compile(r"\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b")
+BTC_BECH32_REGEX = re.compile(r"\bbc1[ac-hj-np-z02-9]{11,71}\b", re.IGNORECASE)
+WALLET_CONTEXT_HINTS = (
+    "wallet", "address", "deposit", "send", "receive", "payment", "transfer", "btc", "bitcoin", "eth", "usdt", "tron",
+)
 
 SUSPICIOUS_TLDS = {
     ".tk", ".xyz", ".ru", ".top", ".click", ".gq", ".cf", ".ml", ".ga", ".pw",
@@ -60,6 +77,15 @@ SUSPICIOUS_URL_HINTS: dict[str, int] = {
 PAYMENT_LINE_HINTS = (
     "send", "transfer", "deposit", "pay", "wallet", "verify",
     "fee", "eth", "usdt", "btc", "address", "claim",
+)
+
+NOTABLE_TEXT_HINTS = (
+    "connect wallet", "claim reward", "claim", "approve", "verify", "bonus", "airdrop", "lottery", "draw",
+    "hourly", "ranking", "pool", "reward", "send", "deposit", "wallet", "address",
+)
+
+PHONE_CONTEXT_HINTS = (
+    "phone", "whatsapp", "contact", "call", "telegram", "support", "helpdesk", "reach us", "customer care",
 )
 
 # ─── Personas ─────────────────────────────────────────────────────────────────
@@ -100,6 +126,44 @@ DEFAULT_PERSONAS = {
     },
 }
 
+AUTO_PERSONA_ALIASES = {
+    "",
+    "auto",
+    "dynamic",
+    "adaptive",
+    "default",
+    "i'm new to crypto and want to claim the airdrop",
+}
+
+
+def _is_auto_persona_request(persona_key: str, persona_prompt: str) -> bool:
+    requested = (persona_prompt or persona_key or "").strip().lower()
+    return requested in AUTO_PERSONA_ALIASES
+
+
+def _select_persona_for_target(url: str, domain: str) -> tuple[str, str, list[str]]:
+    ll = f"{url}\n{domain}".lower()
+    reasons: list[str] = []
+
+    if any(k in ll for k in ("airdrop", "claim", "reward", "bonus", "lottery", "draw", "winner")):
+        reasons.append("promo_lure_terms")
+        return "crypto_curious", "User chasing rewards; asks payout and wallet destination questions.", reasons
+
+    if any(k in ll for k in ("connect", "wallet", "approve", "swap", "stake", "mint")):
+        reasons.append("wallet_action_terms")
+        return "crypto_curious", "User is wallet-active and asks contract/address validation before sending funds.", reasons
+
+    if any(k in ll for k in ("login", "verify", "secure", "account", "password", "recovery")):
+        reasons.append("credential_lure_terms")
+        return "elderly_victim", "User is confused by account verification flow and asks for safe step-by-step guidance.", reasons
+
+    if any(domain.endswith(tld) for tld in SUSPICIOUS_TLDS):
+        reasons.append("suspicious_tld")
+        return "elderly_victim", "User is cautious but vulnerable, asks basic trust and payment questions.", reasons
+
+    reasons.append("default_profile")
+    return "crypto_curious", "User is curious and probes minimum deposit, ROI, and receiving wallet.", reasons
+
 # ─── Helpers ──────────────────────────────────────────────────────────────────
 
 def _dedupe(items: list[str]) -> list[str]:
@@ -114,31 +178,206 @@ def _dedupe(items: list[str]) -> list[str]:
 def _extract_all_indicators(text: str, links: list[str]) -> dict[str, list[str]]:
     decoded_text = unquote(text or "")
     full = f"{decoded_text}\n" + "\n".join(links)
-    wallets  = ETH_REGEX.findall(full) + BTC_REGEX.findall(full) + TRON_REGEX.findall(full)
-    telegram = [f"@{m}" for m in TELEGRAM_REGEX.findall(full)]
+    wallets  = _extract_wallets(full)
+    telegram = _extract_telegram_ids(full)
     emails   = EMAIL_REGEX.findall(full)
-    phones   = WHATSAPP_REGEX.findall(full) + PHONE_REGEX.findall(full)
+    phones   = _extract_phone_contacts(full)
     payments = _extract_payment_instructions(full)
+    behavior = _extract_behavior_signals(full)
     return {
         "wallets":             _dedupe(wallets),
         "telegramIds":         _dedupe(telegram),
         "emails":              _dedupe(emails),
         "phones":              _dedupe(phones),
         "paymentInstructions": payments,
+        "behaviorSignals":     _dedupe(behavior),
     }
 
 
 def _extract_payment_instructions(text: str) -> list[str]:
+    script_noise_tokens = (
+        "function ", "xhr.", "xmlhttprequest", "window.", "document.",
+        "setrequestheader", "content-type", "application/x-www-form-urlencoded",
+        "<script", "</script>", "onload=", "onclick=", "=>", "{", "}",
+    )
+
+    def _clean_line(line: str) -> str:
+        cleaned = re.sub(r"<[^>]+>", " ", line)
+        cleaned = re.sub(r"\s+", " ", cleaned).strip()
+        return cleaned
+
+    def _is_human_instruction(candidate: str) -> bool:
+        ll = candidate.lower()
+        if len(candidate) < 12:
+            return False
+        if any(tok in ll for tok in script_noise_tokens):
+            return False
+        if candidate.count(";") >= 2:
+            return False
+        if re.search(r"\b(var|const|let|return|if|else)\b", ll):
+            return False
+        return any(h in ll for h in PAYMENT_LINE_HINTS)
+
     hits: list[str] = []
     candidates = text.splitlines() + re.split(r"(?<=[.!?])\s+", text)
     for line in candidates:
-        clean_line = line.strip()
-        ll = clean_line.lower()
-        if len(clean_line) < 10:
+        clean_line = _clean_line(line)
+        if not _is_human_instruction(clean_line):
             continue
-        if any(h in ll for h in PAYMENT_LINE_HINTS):
-            hits.append(clean_line[:220])
+        hits.append(clean_line[:180])
     return _dedupe(hits)[:8]
+
+
+def _extract_phone_contacts(text: str) -> list[str]:
+    out: list[str] = []
+
+    for wa in WHATSAPP_REGEX.findall(text):
+        if 7 <= len(wa) <= 15:
+            out.append(wa)
+
+    for match in PHONE_REGEX.finditer(text):
+        candidate = match.group(0)
+        digits_only = re.sub(r"\D", "", candidate)
+
+        if len(digits_only) < 10 or len(digits_only) > 15:
+            continue
+        if candidate.startswith("+") is False and len(digits_only) >= 13:
+            continue
+
+        left = max(0, match.start() - 32)
+        right = min(len(text), match.end() + 32)
+        context = text[left:right].lower()
+        if not any(hint in context for hint in PHONE_CONTEXT_HINTS):
+            continue
+
+        out.append(candidate)
+
+    return _dedupe(out)
+
+
+def _extract_behavior_signals(text: str) -> list[str]:
+    ll = text.lower()
+    signals: list[str] = []
+
+    if "xmlhttprequest" in ll and "event.type" in ll:
+        signals.append("Tracks user interaction events and posts them via XHR")
+    if "window.location.href" in ll and ("xhr.open(" in ll or "fetch(" in ll):
+        signals.append("Posts telemetry back to current page endpoint")
+    if re.search(r"addEventListener\((['\"])(mousemove|keydown|touchstart|click)\1", text, re.IGNORECASE):
+        signals.append("Registers event listeners to monitor user actions")
+    if any(k in ll for k in ("connect wallet", "walletconnect", "ethereum.request", "eth_requestaccounts")):
+        signals.append("Contains wallet connection trigger logic")
+    if any(k in ll for k in ("approve", "setapprovalforall", "allowance", "permit(")):
+        signals.append("Contains token approval / allowance interaction logic")
+    if any(k in ll for k in ("private key", "seed phrase", "mnemonic", "recovery phrase")):
+        signals.append("Contains seed/private-key credential capture language")
+    if any(k in ll for k in ("countdown", "expires", "limited time", "claim now")):
+        signals.append("Uses urgency language to pressure immediate action")
+    if any(k in ll for k in ("your ip:", "ip address", "geolocation", "timezone")):
+        signals.append("Collects or exposes device/network fingerprinting context")
+
+    return _dedupe(signals)[:8]
+
+
+def _extract_notable_page_text(page_text: str) -> list[str]:
+    candidates = page_text.splitlines() + re.split(r"(?<=[.!?])\s+", page_text)
+    out: list[str] = []
+
+    for raw in candidates:
+        line = re.sub(r"\s+", " ", raw).strip()
+        ll = line.lower()
+        if len(line) < 10 or len(line) > 180:
+            continue
+        if any(token in ll for token in ("function ", "xmlhttprequest", "xhr.", "window.", "document.")):
+            continue
+        if re.search(r"[{};]{2,}", line):
+            continue
+        if not any(h in ll for h in NOTABLE_TEXT_HINTS):
+            continue
+        out.append(line)
+
+    return _dedupe(out)[:10]
+
+
+def _extract_notable_script_text(script_text: str) -> list[str]:
+    out: list[str] = []
+
+    phrase_patterns = [
+        r"connect\s+wallet",
+        r"claim\s+reward",
+        r"claim\s+now",
+        r"no\s+rewards\s+yet",
+        r"hourly\s+(?:prize|reward|ranking)",
+        r"weekly\s+rankings?",
+        r"monthly\s+rankings?",
+        r"bonus\s+pool",
+        r"lottery\s+draw",
+        r"join\s+lucky\s+hash",
+    ]
+
+    for pattern in phrase_patterns:
+        for m in re.finditer(pattern, script_text, re.IGNORECASE):
+            phrase = re.sub(r"\s+", " ", m.group(0)).strip()
+            if phrase:
+                out.append(phrase.title())
+
+    string_matches = re.findall(r"['\"]([^'\"]{6,220})['\"]", script_text)
+    for raw in string_matches:
+        normalized = re.sub(r"\s+", " ", raw).strip()
+        segments = re.split(r"[|•·,:/]|\s{2,}", normalized)
+        if not segments:
+            segments = [normalized]
+
+        for segment in segments:
+            line = re.sub(r"\s+", " ", segment).strip()
+            ll = line.lower()
+            if len(line) < 8 or len(line) > 120:
+                continue
+            if any(token in ll for token in ("xmlhttprequest", "application/x-www-form-urlencoded", "function ", "window.", "document.", "xhr.send", "xhr.open")):
+                continue
+            if re.search(r"[{};<>]{2,}", line):
+                continue
+            if not any(h in ll for h in NOTABLE_TEXT_HINTS):
+                continue
+            out.append(line)
+
+    return _dedupe(out)[:10]
+
+
+def _extract_telegram_ids(text: str) -> list[str]:
+    matches = TELEGRAM_LINK_REGEX.findall(text) + TELEGRAM_AT_REGEX.findall(text)
+    out: list[str] = []
+    for candidate in matches:
+        lowered = candidate.lower()
+        if lowered in TELEGRAM_NOISE_TERMS:
+            continue
+        if lowered.startswith(("http", "www")):
+            continue
+        out.append(f"@{candidate}")
+    return _dedupe(out)
+
+
+def _near_wallet_context(text: str, start: int, end: int, window: int = 48) -> bool:
+    left = max(0, start - window)
+    right = min(len(text), end + window)
+    snippet = text[left:right].lower()
+    return any(hint in snippet for hint in WALLET_CONTEXT_HINTS)
+
+
+def _extract_wallets(text: str) -> list[str]:
+    wallets: list[str] = []
+
+    wallets.extend(ETH_REGEX.findall(text))
+    wallets.extend(TRON_REGEX.findall(text))
+    wallets.extend(BTC_BECH32_REGEX.findall(text))
+
+    for match in BTC_LEGACY_REGEX.finditer(text):
+        value = match.group(0)
+        if _near_wallet_context(text, match.start(), match.end()):
+            wallets.append(value)
+
+    filtered = [w for w in wallets if len(w) <= 80]
+    return _dedupe(filtered)
 
 
 def _extract_decoded_blob_text(text: str) -> str:
@@ -218,6 +457,17 @@ def _merge_indicators(*dicts) -> dict[str, list[str]]:
 def _build_crawl_diagnostics(crawl_method: str, crawl_failures: list[str]) -> dict[str, Any]:
     text = "\n".join(crawl_failures).lower()
     playwright_missing = "no module named 'playwright'" in text
+    playwright_browser_missing = (
+        "browsertype.launch: executable doesn't exist" in text
+        or "please run the following command to download new browsers" in text
+        or "playwright install" in text and "chrome-linux" in text
+    )
+    playwright_host_deps_missing = (
+        "host system is missing dependencies to run browsers" in text
+        or "missing libraries:" in text
+        or "libglib-2.0.so.0" in text
+    )
+    playwright_asyncio_conflict = "playwright sync api inside the asyncio loop" in text
     dns_failure = (
         "nameresolutionerror" in text
         or "failed to resolve" in text
@@ -231,6 +481,12 @@ def _build_crawl_diagnostics(crawl_method: str, crawl_failures: list[str]) -> di
         likely_cause = "playwright_missing_and_dns_failure"
     elif playwright_missing:
         likely_cause = "playwright_missing"
+    elif playwright_host_deps_missing:
+        likely_cause = "playwright_host_dependencies_missing"
+    elif playwright_browser_missing:
+        likely_cause = "playwright_browser_missing"
+    elif playwright_asyncio_conflict:
+        likely_cause = "playwright_asyncio_conflict"
     elif dns_failure:
         likely_cause = "dns_resolution_failed"
     elif timeout_failure:
@@ -241,6 +497,16 @@ def _build_crawl_diagnostics(crawl_method: str, crawl_failures: list[str]) -> di
     recommendations: list[str] = []
     if playwright_missing:
         recommendations.append("Install Playwright in backend venv and run 'python -m playwright install chromium'")
+    if playwright_host_deps_missing:
+        recommendations.append(
+            "Host OS is missing Chromium runtime libraries; run 'python -m playwright install-deps chromium' in the backend runtime (Linux container/VM) or install required apt packages, then restart backend"
+        )
+    if playwright_browser_missing:
+        recommendations.append(
+            "Playwright browser binary is missing in the runtime environment; run 'python -m playwright install chromium' where the backend process actually runs (container/VM/server), then restart backend"
+        )
+    if playwright_asyncio_conflict:
+        recommendations.append("Playwright Sync API cannot run inside an asyncio loop; wrap the call with asyncio.to_thread()")
     if dns_failure:
         recommendations.append("Verify domain spelling and DNS availability; try opening the URL in browser")
     if timeout_failure:
@@ -252,6 +518,9 @@ def _build_crawl_diagnostics(crawl_method: str, crawl_failures: list[str]) -> di
         "method": crawl_method,
         "unreachable": unreachable,
         "playwrightMissing": playwright_missing,
+        "playwrightHostDepsMissing": playwright_host_deps_missing,
+        "playwrightBrowserMissing": playwright_browser_missing,
+        "playwrightAsyncioConflict": playwright_asyncio_conflict,
         "dnsFailure": dns_failure,
         "timeout": timeout_failure,
         "likelyCause": likely_cause,
@@ -420,16 +689,112 @@ def _interact_via_telegram(telegram_id: str, persona: dict) -> list[dict]:
     }]
 
 
+def _deep_interact_page(page) -> list[str]:
+    interactions: list[str] = []
+
+    for idx in range(PLAYWRIGHT_DEEP_SCROLL_STEPS):
+        try:
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            page.wait_for_timeout(PLAYWRIGHT_DEEP_SCROLL_WAIT_MS)
+            interactions.append(f"scroll_step:{idx + 1}")
+        except Exception:
+            break
+
+    click_selectors = [
+        "button:has-text('Connect Wallet')",
+        "button:has-text('Connect')",
+        "button:has-text('Claim')",
+        "button:has-text('Claim Reward')",
+        "button:has-text('Join')",
+        "a:has-text('Connect Wallet')",
+        "a:has-text('Claim')",
+        "[role='button']:has-text('Connect')",
+    ]
+
+    clicks = 0
+    for selector in click_selectors:
+        if clicks >= PLAYWRIGHT_INTERACTION_MAX_CLICKS:
+            break
+        try:
+            target = page.locator(selector).first
+            if target.count() and target.is_visible():
+                target.click(timeout=1_500)
+                page.wait_for_timeout(650)
+                interactions.append(f"clicked:{selector}")
+                clicks += 1
+        except Exception:
+            continue
+
+    return interactions
+
+
+def _collect_page_artifacts(page, url: str) -> tuple[list[str], str, str]:
+    links = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
+    form_actions = page.eval_on_selector_all("form[action]", "els => els.map(e => e.action)")
+    iframe_sources = page.eval_on_selector_all("iframe[src]", "els => els.map(e => e.src)")
+    script_sources = page.eval_on_selector_all("script[src]", "els => els.map(e => e.src)")
+    ui_hints = page.eval_on_selector_all(
+        "[data-tooltip],[data-title],[title]",
+        "els => els.map(e => e.getAttribute('data-tooltip') || e.getAttribute('data-title') || e.getAttribute('title') || '')",
+    )
+
+    text_chunks = [
+        page.inner_text("body"),
+        "\n".join(ui_hints),
+        page.content(),
+    ]
+
+    script_text = "\n".join(page.eval_on_selector_all("script", "els => els.map(e => e.innerText || '').slice(0, 120)"))
+    script_text += "\n" + "\n".join(script_sources)
+
+    combined_links = _dedupe(links + form_actions + iframe_sources + script_sources + [url])
+    combined_text = "\n".join(chunk for chunk in text_chunks if chunk)
+    return combined_links, combined_text, script_text
+
+
 # ─── Playwright crawl (upgraded) ─────────────────────────────────────────────
+
+def _is_playwright_browser_missing_error(exc: Exception) -> bool:
+    text = str(exc).lower()
+    return (
+        "browsertype.launch: executable doesn't exist" in text
+        or "please run the following command to download new browsers" in text
+    )
+
+
+def _install_playwright_chromium_runtime() -> None:
+    cmd = [sys.executable, "-m", "playwright", "install", "chromium"]
+    completed = subprocess.run(
+        cmd,
+        capture_output=True,
+        text=True,
+        timeout=PLAYWRIGHT_INSTALL_TIMEOUT_S,
+        check=False,
+    )
+    if completed.returncode != 0:
+        tail = "\n".join((completed.stderr or completed.stdout or "").splitlines()[-8:])
+        raise RuntimeError(f"Playwright chromium install failed in runtime env (code {completed.returncode}): {tail}")
+
+
+def _launch_chromium_with_recovery(playwright):
+    launch_args = {
+        "headless": True,
+        "args": ["--disable-blink-features=AutomationControlled"],
+    }
+    try:
+        return playwright.chromium.launch(**launch_args)
+    except Exception as exc:
+        if not _is_playwright_browser_missing_error(exc):
+            raise
+        logger.warning("Playwright chromium executable missing in runtime; attempting in-process install and retry")
+        _install_playwright_chromium_runtime()
+        return playwright.chromium.launch(**launch_args)
 
 def _crawl_with_playwright(url: str, persona: dict) -> dict[str, Any]:
     from playwright.sync_api import sync_playwright
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
-            headless=True,
-            args=["--disable-blink-features=AutomationControlled"],
-        )
+        browser = _launch_chromium_with_recovery(p)
         context = browser.new_context(
             user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
                        "(KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
@@ -446,12 +811,16 @@ def _crawl_with_playwright(url: str, persona: dict) -> dict[str, Any]:
 
         page.goto(url, wait_until="domcontentloaded", timeout=PLAYWRIGHT_NAV_TIMEOUT_MS)
         page.wait_for_timeout(PLAYWRIGHT_POST_LOAD_WAIT_MS)
+        try:
+            page.wait_for_load_state("networkidle", timeout=4_000)
+        except Exception:
+            pass
+
+        deep_interactions = _deep_interact_page(page)
 
         screenshot_initial = _screenshot_b64(page)
 
-        links = page.eval_on_selector_all("a[href]", "els => els.map(e => e.href)")
-        text  = page.inner_text("body")
-        script_text = "\n".join(page.eval_on_selector_all("script", "els => els.map(e => e.innerText || '').slice(0, 40)"))
+        links, text, script_text = _collect_page_artifacts(page, url)
         title = page.title()
 
         # Form interaction
@@ -487,6 +856,7 @@ def _crawl_with_playwright(url: str, persona: dict) -> dict[str, Any]:
             f"Form POSTs intercepted: {sum(1 for f in form_intel if f.get('suspicious'))}",
             f"Chat exchanges: {len(chat_exchanges)}",
             f"Chat widgets: {len(chat_widgets)}",
+            f"Deep interactions: {len(deep_interactions)}",
             f"Redirects: {len(redirects)}",
         ],
     }
@@ -558,13 +928,23 @@ def run_honeytrap_bot(url: str, persona_key: str = "elderly_victim", persona_pro
     parsed = urlparse(normalized)
     domain = parsed.netloc.lower().removeprefix("www.")
 
-    if persona_key and persona_key not in DEFAULT_PERSONAS and not persona_prompt:
-        persona_prompt = persona_key
-        persona_key = "elderly_victim"
+    persona_mode = "manual"
+    persona_reasons: list[str] = []
 
-    persona = DEFAULT_PERSONAS.get(persona_key, DEFAULT_PERSONAS["elderly_victim"])
-    if persona_prompt:
-        persona = {**persona, "backstory": persona_prompt}
+    if _is_auto_persona_request(persona_key, persona_prompt):
+        selected_key, adaptive_backstory, persona_reasons = _select_persona_for_target(normalized, domain)
+        persona = {**DEFAULT_PERSONAS[selected_key], "backstory": adaptive_backstory}
+        persona_key = selected_key
+        persona_prompt = ""
+        persona_mode = "auto"
+    else:
+        if persona_key and persona_key not in DEFAULT_PERSONAS and not persona_prompt:
+            persona_prompt = persona_key
+            persona_key = "elderly_victim"
+
+        persona = DEFAULT_PERSONAS.get(persona_key, DEFAULT_PERSONAS["elderly_victim"])
+        if persona_prompt:
+            persona = {**persona, "backstory": persona_prompt}
 
     # ── Crawl ──────────────────────────────────────────────────────────────────
     crawl_method = "playwright"
@@ -609,6 +989,10 @@ def run_honeytrap_bot(url: str, persona_key: str = "elderly_victim", persona_pro
         url_indicators,
     )
 
+    notable_page_text = _extract_notable_page_text(crawl.get("pageText", ""))
+    notable_script_text = _extract_notable_script_text(crawl.get("scriptText", ""))
+    notable_text = _dedupe(notable_page_text + notable_script_text)[:12]
+
     # Telegram interactions (identified but not yet engaged)
     telegram_contacts = []
     for tg in indicators.get("telegramIds", []):
@@ -625,6 +1009,7 @@ def run_honeytrap_bot(url: str, persona_key: str = "elderly_victim", persona_pro
         len(indicators["emails"])              * 3  +
         len(indicators["phones"])              * 4  +
         len(indicators["paymentInstructions"]) * 4  +
+        len(indicators.get("behaviorSignals", [])) * 3 +
         len(crawl["chatExchanges"])            * 6  +  # live chat = strong signal
         sum(1 for f in crawl["formIntel"] if f.get("suspicious")) * 8  # POST form = strong signal
     )
@@ -653,8 +1038,15 @@ def run_honeytrap_bot(url: str, persona_key: str = "elderly_victim", persona_pro
     # ── Build evidence log ─────────────────────────────────────────────────────
     evidence = list(crawl.get("evidence", []))
     evidence.append(f"Crawler: {crawl_method}")
+    evidence.append(f"Persona mode: {persona_mode}")
+    if persona_mode == "auto":
+        evidence.append(f"Persona selected: {persona_key}")
+        if persona_reasons:
+            evidence.append(f"Persona reasons: {', '.join(persona_reasons[:4])}")
     if heuristic_signals:
         evidence.append(f"URL signals: {', '.join(heuristic_signals[:6])}")
+    if notable_text:
+        evidence.append(f"Notable page text lines: {len(notable_text)}")
     if external_domains:
         evidence.append(f"External domains observed: {', '.join(external_domains[:6])}")
     if crawl_failures and crawl_method != "url_fallback":
@@ -692,6 +1084,8 @@ def run_honeytrap_bot(url: str, persona_key: str = "elderly_victim", persona_pro
         "emails":              indicators["emails"],
         "phones":              indicators["phones"],
         "paymentInstructions": indicators["paymentInstructions"],
+        "behaviorSignals":     indicators.get("behaviorSignals", []),
+        "notablePageText":     notable_text,
 
         # Interaction intel (what the bot actually did)
         "formIntel":           crawl["formIntel"],

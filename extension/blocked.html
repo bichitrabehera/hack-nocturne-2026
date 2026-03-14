@@ -129,6 +129,24 @@
       transition: background 0.2s;
     }
 
+    .btn-honeytrap {
+      display: block;
+      width: 100%;
+      background: #0891b2;
+      color: white;
+      padding: 13px;
+      border-radius: 10px;
+      font-weight: 700;
+      font-size: 14px;
+      text-decoration: none;
+      margin-bottom: 10px;
+      transition: background 0.2s;
+    }
+
+    .btn-honeytrap:hover {
+      background: #06b6d4;
+    }
+
     .btn-polygonscan:hover {
       background: #2563eb;
     }
@@ -174,11 +192,42 @@
       verified on the Polygon blockchain.
     </p>
 
+    <div class="url-box" id="blockedUrl">Loading blocked URL...</div>
+
+    <div class="stats">
+      <div>
+        <div class="stat-label">Risk Score</div>
+        <div class="stat-value" id="riskScore">—</div>
+      </div>
+      <div>
+        <div class="stat-label">Category</div>
+        <div class="stat-value category" id="category">unknown</div>
+      </div>
+    </div>
+
+    <div class="tx-box" id="txBox" style="display:none;">
+      <div class="tx-label">Blockchain Evidence (txHash)</div>
+      <div class="tx-hash" id="txHash"></div>
+    </div>
+
+    <a id="honeytrapBtn" class="btn-honeytrap" href="#" target="_self">
+      🔎 View Honeytrap Analysis
+    </a>
+
+    <a id="polygonscanBtn" class="btn-polygonscan" href="#" target="_blank" rel="noopener noreferrer"
+      style="display:none;">
+      View On PolygonScan
+    </a>
+
+    <button class="btn-back" id="goBackBtn">Go Back</button>
+
 
     <p class="powered">
       Protected by <span>ScamShield</span> · Powered by Polygon Blockchain
     </p>
   </div>
+
+  <script src="blocked.js"></script>
 
 
 </body>
