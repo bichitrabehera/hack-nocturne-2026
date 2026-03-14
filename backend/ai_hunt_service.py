@@ -27,7 +27,7 @@ import requests
 logger = logging.getLogger(__name__)
 
 # ─── Tuning constants ─────────────────────────────────────────────────────────
-HUNT_INTERVAL_SECONDS = 40       # pause between full scan cycles
+HUNT_INTERVAL_SECONDS = 400      # pause between full scan cycles
 URLS_PER_CYCLE        = 6        # URLs analyzed each cycle
 MAX_LOG_ENTRIES       = 300      # rolling window kept in memory
 MIN_RISK_TO_LOG       = 40       # ignore safe-looking URLs

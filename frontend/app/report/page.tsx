@@ -119,14 +119,11 @@ export default function ReportPage() {
       };
       if (withWallet && account) body.reporterAddress = account;
 
-      const res = await fetch(
-        "https://hack-nocturne-2026-production.up.railway.app/api/report",
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(body),
-        },
-      );
+      const res = await fetch("http://localhost:8000/api/report", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      });
 
       if (!res.ok) {
         let errorDetail = "Report failed";

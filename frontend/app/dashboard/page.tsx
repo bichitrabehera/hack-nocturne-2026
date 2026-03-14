@@ -20,7 +20,7 @@ import type { MapConnection, MapMarker } from "@/components/ScamMap";
 // Load Leaflet map only on the client side (Leaflet requires window / document)
 const ScamMap = dynamic(() => import("@/components/ScamMap"), { ssr: false });
 
-const API = "https://hack-nocturne-2026-production.up.railway.app/api";
+const API = "http://localhost:8000/api";
 
 type ReportItem = {
   id: number;
@@ -1027,60 +1027,7 @@ export default function Dashboard() {
         </div>
 
         {/* Scam Campaign Detection */}
-        <div className="rounded-[14px] border border-purple-500/20 bg-gradient-to-br from-slate-900 to-[#120b1d] p-5 mb-8">
-          <div className="flex items-center justify-between mb-3">
-            <div>
-              <p className="text-purple-300 text-xs uppercase tracking-widest">
-                Scam Campaign Detection
-              </p>
-              <p className="text-slate-500 text-xs mt-1">
-                Connected phishing domains and wallet reuse signals
-              </p>
-            </div>
-            <span className="text-[10px] font-mono text-purple-300 border border-purple-500/30 bg-purple-500/10 px-2 py-1 rounded-full">
-              {aiHunt?.campaigns?.length || 0} campaigns
-            </span>
-          </div>
-
-          {aiHunt?.campaigns?.length ? (
-            <div className="grid md:grid-cols-2 gap-3">
-              {aiHunt.campaigns.slice(0, 4).map((campaign) => (
-                <div
-                  key={campaign.campaign}
-                  className="rounded-lg border border-slate-800 bg-slate-900/60 p-3"
-                >
-                  <div className="flex items-center justify-between">
-                    <p className="text-purple-300 text-sm font-semibold capitalize">
-                      {campaign.campaign}
-                    </p>
-                    <span className="text-red-400 text-xs font-mono">
-                      risk {campaign.maxRisk}
-                    </span>
-                  </div>
-                  <p className="text-slate-500 text-xs mt-1">
-                    {campaign.connectedDomains} connected domains ·{" "}
-                    {campaign.reusedWallets} reused wallets
-                  </p>
-                  <div className="mt-2 space-y-1">
-                    {campaign.domains.slice(0, 3).map((domain) => (
-                      <p
-                        key={domain}
-                        className="font-mono text-[11px] text-slate-300 break-all"
-                      >
-                        • {domain}
-                      </p>
-                    ))}
-                  </div>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <div className="h-24 flex items-center justify-center text-slate-600 text-xs">
-              No linked campaigns detected yet
-            </div>
-          )}
-        </div>
-
+        
         {/* Table */}
         <div className="rounded-[14px] border border-red-500/15 bg-gradient-to-br from-gray-900 to-slate-900 overflow-hidden hover:border-red-500/30 transition-all">
           {/* Table toolbar */}

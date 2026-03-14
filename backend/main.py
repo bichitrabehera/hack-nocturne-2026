@@ -198,7 +198,7 @@ class VoteRequest(BaseModel):
 
 class HoneytrapRequest(BaseModel):
     url: str
-    persona: str = "I'm new to crypto and want to claim the airdrop"
+    persona: str = "auto"
 
 
 class HistoryPublishRequest(BaseModel):
