@@ -2,6 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useMemo, useRef, useState } from "react";
+import type { ForceGraphMethods, LinkObject, NodeObject } from "react-force-graph-2d";
 
 export type ScamGraphNode = {
   id: string;
@@ -41,7 +42,7 @@ const LEGEND_ITEMS = [
 ];
 
 export default function ScamGraph({ graph }: { graph: ScamGraphData }) {
-  const graphRef = useRef<any>(null);
+  const graphRef = useRef<ForceGraphMethods | undefined>(undefined);
   const [focusedNodeId, setFocusedNodeId] = useState<string | null>(null);
   const hasData = graph.nodes.length > 0;
 
@@ -65,6 +66,21 @@ export default function ScamGraph({ graph }: { graph: ScamGraphData }) {
 
     return { nodes, links };
   }, [graph]);
+
+  const endpointId = (endpoint: unknown): string => {
+    if (typeof endpoint === "string" || typeof endpoint === "number") {
+      return String(endpoint);
+    }
+    if (
+      typeof endpoint === "object" &&
+      endpoint !== null &&
+      "id" in endpoint &&
+      (typeof endpoint.id === "string" || typeof endpoint.id === "number")
+    ) {
+      return String(endpoint.id);
+    }
+    return "";
+  };
 
   const connectedNodeIds = useMemo(() => {
     if (!focusedNodeId) return new Set<string>();
@@ -97,13 +113,13 @@ export default function ScamGraph({ graph }: { graph: ScamGraphData }) {
     id.length > 26 ? `${id.slice(0, 23)}...` : id;
 
   return (
-    <div className="w-full border border-gray-700 rounded-xl bg-gray-900/40 overflow-hidden">
-      <div className="px-3 py-2 border-b border-gray-800 flex items-center justify-between gap-3 flex-wrap">
-        <div className="flex items-center gap-3 flex-wrap">
+    <div className="glass-panel w-full overflow-hidden rounded-2xl border border-[var(--border-soft)] shadow-[0_14px_50px_rgba(4,12,22,0.44)]">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[var(--border-soft)] px-3 py-2">
+        <div className="flex flex-wrap items-center gap-3">
           {LEGEND_ITEMS.map((item) => (
             <span
               key={item.type}
-              className="inline-flex items-center gap-1.5 text-[10px] font-mono text-gray-300"
+              className="mono inline-flex items-center gap-1.5 text-[10px] text-[#b6c7d5]"
             >
               <span
                 className="w-2 h-2 rounded-full"
@@ -118,21 +134,21 @@ export default function ScamGraph({ graph }: { graph: ScamGraphData }) {
           <button
             type="button"
             onClick={handleZoomOut}
-            className="px-2 py-1 text-[10px] font-mono border border-gray-700 rounded text-gray-300 hover:text-white hover:border-cyan-400/30"
+            className="mono rounded border border-[var(--border-soft)] px-2 py-1 text-[10px] text-[var(--text-muted)] transition-colors hover:border-[var(--border-strong)] hover:text-white"
           >
             -
           </button>
           <button
             type="button"
             onClick={handleZoomIn}
-            className="px-2 py-1 text-[10px] font-mono border border-gray-700 rounded text-gray-300 hover:text-white hover:border-cyan-400/30"
+            className="mono rounded border border-[var(--border-soft)] px-2 py-1 text-[10px] text-[var(--text-muted)] transition-colors hover:border-[var(--border-strong)] hover:text-white"
           >
             +
           </button>
           <button
             type="button"
             onClick={handleFit}
-            className="px-2 py-1 text-[10px] font-mono border border-gray-700 rounded text-gray-300 hover:text-white hover:border-cyan-400/30"
+            className="mono rounded border border-[var(--border-soft)] px-2 py-1 text-[10px] text-[var(--text-muted)] transition-colors hover:border-[var(--border-strong)] hover:text-white"
           >
             Fit
           </button>
@@ -146,15 +162,21 @@ export default function ScamGraph({ graph }: { graph: ScamGraphData }) {
             width={900}
             height={400}
             graphData={normalizedData}
-            nodeLabel={(node: any) => `${node.type}: ${node.id}`}
-            nodeColor={(node: any) => {
-              if (!focusedNodeId) return node.color || "#94a3b8";
+            nodeLabel={(node: NodeObject) => {
+              const type =
+                typeof node.type === "string" ? node.type : "infrastructure";
+              return `${type}: ${String(node.id ?? "unknown")}`;
+            }}
+            nodeColor={(node: NodeObject) => {
+              const color =
+                typeof node.color === "string" ? node.color : "#94a3b8";
+              if (!focusedNodeId) return color;
               return connectedNodeIds.has(String(node.id))
-                ? node.color || "#94a3b8"
+                ? color
                 : "rgba(148,163,184,0.25)";
             }}
             nodeCanvasObjectMode={() => "after"}
-            nodeCanvasObject={(node: any, ctx: CanvasRenderingContext2D) => {
+            nodeCanvasObject={(node: NodeObject, ctx: CanvasRenderingContext2D) => {
               const label = shortId(String(node.id));
               const fontSize = 10;
               ctx.font = `${fontSize}px monospace`;
@@ -163,36 +185,36 @@ export default function ScamGraph({ graph }: { graph: ScamGraphData }) {
             }}
             linkDirectionalArrowLength={4}
             linkDirectionalArrowRelPos={1}
-            linkColor={(link: any) => {
+            linkColor={(link: LinkObject) => {
               if (!focusedNodeId) return "rgba(148,163,184,0.45)";
-              const source = String(link.source?.id ?? link.source);
-              const target = String(link.target?.id ?? link.target);
+              const source = String(endpointId(link.source));
+              const target = String(endpointId(link.target));
               return source === focusedNodeId || target === focusedNodeId
                 ? "rgba(34,211,238,0.9)"
                 : "rgba(148,163,184,0.12)";
             }}
-            linkWidth={(link: any) => {
+            linkWidth={(link: LinkObject) => {
               if (!focusedNodeId) return 1.2;
-              const source = String(link.source?.id ?? link.source);
-              const target = String(link.target?.id ?? link.target);
+              const source = String(endpointId(link.source));
+              const target = String(endpointId(link.target));
               return source === focusedNodeId || target === focusedNodeId
                 ? 2.2
                 : 0.8;
             }}
-            onNodeClick={(node: any) => {
+            onNodeClick={(node: NodeObject) => {
               const id = String(node?.id || "");
               if (!id) return;
               setFocusedNodeId((prev) => (prev === id ? null : id));
             }}
           />
         ) : (
-          <div className="h-full w-full flex items-center justify-center text-xs font-mono text-gray-500">
+          <div className="mono flex h-full w-full items-center justify-center text-xs text-gray-500">
             No graph data yet
           </div>
         )}
       </div>
 
-      <div className="px-3 py-2 border-t border-gray-800 text-[10px] font-mono text-gray-400 flex items-center justify-between gap-2 flex-wrap">
+      <div className="mono flex flex-wrap items-center justify-between gap-2 border-t border-[var(--border-soft)] px-3 py-2 text-[10px] text-[#9cb2c4]">
         <span>Tip: click a node to focus connected infrastructure.</span>
         <span>
           {focusedNodeId ? `Focused: ${shortId(focusedNodeId)}` : "Focus: none"}

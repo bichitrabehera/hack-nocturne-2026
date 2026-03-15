@@ -2,15 +2,17 @@ import React from "react";
 
 const Features = () => {
   return (
-    <div className="">
-      <section className="bg-black py-24 px-4">
-        <div className="max-w-5xl mx-auto">
-          <h2 className="text-3xl font-bold text-center mb-4">How It Works</h2>
-          <p className="text-center text-gray-400 mb-16">
+    <div>
+      <section className="px-4 py-24 md:px-6">
+        <div className="mx-auto max-w-5xl">
+          <h2 className="mb-4 text-center text-3xl font-bold md:text-4xl">
+            How It Works
+          </h2>
+          <p className="mx-auto mb-16 max-w-xl text-center text-[var(--text-muted)]">
             Three steps to permanent scam protection
           </p>
 
-          <div className="grid md:grid-cols-3 gap-8">
+          <div className="grid gap-8 md:grid-cols-3">
             {[
               {
                 step: "01",
@@ -33,31 +35,33 @@ const Features = () => {
             ].map(({ step, icon, title, desc }) => (
               <div
                 key={step}
-                className="bg-gray-800/50 border border-gray-700  p-6 hover:border-blue-500/50 transition-colors"
+                className="glass-panel group rounded-3xl p-6 transition-all hover:-translate-y-1 hover:border-[var(--border-strong)]"
               >
-                <div className="flex items-center gap-3 mb-4">
+                <div className="mb-4 flex items-center gap-3">
                   <span className="text-3xl">{icon}</span>
-                  <span className="text-blue-400 font-mono text-sm font-bold">
+                  <span className="mono text-sm font-bold text-[#8fd6ff]">
                     {step}
                   </span>
                 </div>
                 <h3 className="text-lg font-semibold mb-2">{title}</h3>
-                <p className="text-gray-400 text-sm leading-relaxed">{desc}</p>
+                <p className="text-sm leading-relaxed text-[var(--text-muted)]">
+                  {desc}
+                </p>
               </div>
             ))}
           </div>
         </div>
       </section>
-      <section className="py-24 px-4 bg-black">
-        <div className="max-w-5xl mx-auto">
-          <h2 className="text-3xl font-bold text-center mb-4">
+      <section className="px-4 pb-24 pt-8 md:px-6">
+        <div className="mx-auto max-w-5xl">
+          <h2 className="mb-4 text-center text-3xl font-bold md:text-4xl">
             Built for Everyone
           </h2>
-          <p className="text-center text-gray-400 mb-16">
+          <p className="mx-auto mb-16 max-w-xl text-center text-[var(--text-muted)]">
             No crypto knowledge required
           </p>
 
-          <div className="grid md:grid-cols-2 gap-6">
+          <div className="grid gap-6 md:grid-cols-2">
             {[
               {
                 icon: "🌐",
@@ -82,12 +86,12 @@ const Features = () => {
             ].map(({ icon, title, desc }) => (
               <div
                 key={title}
-                className="flex items-start gap-4 bg-gray-900 border border-gray-800  p-5 hover:border-blue-500/30 transition-colors"
+                className="glass-panel flex items-start gap-4 rounded-2xl p-5 transition-all hover:border-[var(--border-strong)]"
               >
                 <div className="text-2xl mt-1">{icon}</div>
                 <div>
                   <h3 className="font-semibold mb-1">{title}</h3>
-                  <p className="text-gray-400 text-sm">{desc}</p>
+                  <p className="text-sm text-[var(--text-muted)]">{desc}</p>
                 </div>
               </div>
             ))}

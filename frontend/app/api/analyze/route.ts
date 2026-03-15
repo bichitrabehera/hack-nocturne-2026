@@ -1,12 +1,7 @@
 import OpenAI from "openai";
 import { z } from "zod";
-import { config as loadDotenv } from "dotenv";
-import { resolve } from "path";
 
 export const runtime = "nodejs";
-
-loadDotenv({ path: resolve(process.cwd(), ".env.local") });
-loadDotenv({ path: resolve(process.cwd(), "../backend/.env") });
 
 const OPENAI_API_KEY =
   process.env.OPENAI_API_KEY || process.env.BACKEND_OPENAI_API_KEY || "";

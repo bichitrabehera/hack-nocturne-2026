@@ -35,41 +35,42 @@ const Hero = () => {
   };
 
   return (
-    <section className="relative flex-1 flex flex-col items-center justify-center text-center px-4 pt-32 pb-24 overflow-hidden bg-[#07090d]">
+    <section className="noise-overlay relative flex flex-1 flex-col items-center justify-center overflow-hidden px-4 pb-24 pt-32 text-center md:px-6">
       <div
         className="absolute inset-0 pointer-events-none"
         style={{
           backgroundImage:
-            "linear-gradient(rgba(0,229,255,.02) 1px,transparent 1px),linear-gradient(90deg,rgba(0,229,255,.02) 1px,transparent 1px)",
-          backgroundSize: "40px 40px",
+            "linear-gradient(rgba(120,180,215,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(120,180,215,.05) 1px,transparent 1px)",
+          backgroundSize: "52px 52px",
         }}
       />
 
-      <div className="absolute inset-0 bg-gradient-to-b from-[#0d1117] via-[#0a1220] to-[#07090d] pointer-events-none" />
+      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[rgba(4,16,26,0.66)] via-transparent to-[rgba(3,11,18,0.82)]" />
 
-      <div className="absolute top-1/3 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[36rem] h-[36rem] bg-cyan-400/10 rounded-full blur-3xl pointer-events-none" />
+      <div className="pointer-events-none absolute left-1/2 top-[28%] h-[34rem] w-[34rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[rgba(58,167,255,0.16)] blur-3xl" />
+      <div className="pointer-events-none absolute bottom-0 right-[10%] h-72 w-72 rounded-full bg-[rgba(255,112,102,0.16)] blur-3xl" />
 
-      <div className="relative mb-6 inline-flex items-center gap-2 bg-cyan-400/10 border border-cyan-400/20 text-cyan-300 text-sm px-4 py-2 rounded-full font-mono">
-        <span className="w-2 h-2 bg-cyan-300 rounded-full animate-pulse" />
+      <div className="animate-rise mono relative mb-6 inline-flex items-center gap-2 rounded-full border border-[var(--border-strong)] bg-[rgba(58,167,255,0.14)] px-4 py-2 text-sm text-[#a6ddff]">
+        <span className="h-2 w-2 rounded-full bg-[#7de1cf] animate-pulse" />
         AI + Blockchain Powered Protection
       </div>
 
-      <h1 className="relative text-5xl md:text-7xl font-bold tracking-tight mb-6 leading-tight text-white">
+      <h1 className="animate-rise relative mb-6 text-5xl font-bold leading-tight tracking-tight text-white md:text-7xl">
         Detect Scams
         <br />
-        <span className="bg-gradient-to-r from-red-400 to-cyan-300 bg-clip-text text-transparent">
+        <span className="bg-gradient-to-r from-[#ff8d84] via-[#ffd0b3] to-[#77c7ff] bg-clip-text text-transparent">
           Before They Strike
         </span>
       </h1>
 
-      <p className="relative text-[#8aa1b8] text-lg md:text-xl max-w-2xl mb-12 leading-relaxed">
+      <p className="animate-rise relative mb-12 max-w-2xl text-lg leading-relaxed text-[var(--text-muted)] md:text-xl">
         Paste any suspicious message or link. Our AI analyzes it instantly and
         stores confirmed scams permanently on the blockchain — a tamper-proof
         registry nobody can delete.
       </p>
 
-      <div className="relative w-full max-w-2xl bg-[#0d1117] border border-[#1e2a38] rounded-2xl p-6 shadow-2xl text-left">
-        <label className="block text-sm font-medium text-[#8aa1b8] mb-2">
+      <div className="glass-panel animate-rise relative w-full max-w-2xl rounded-3xl p-6 text-left shadow-[0_24px_80px_rgba(3,12,19,0.6)]">
+        <label className="mb-2 block text-sm font-medium text-[var(--text-muted)]">
           Suspicious URL
         </label>
         <input
@@ -77,10 +78,10 @@ const Hero = () => {
           placeholder="https://suspicious-link.com"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          className="w-full bg-[#111820] border border-[#1e2a38] text-white placeholder-[#4f657a] p-3 rounded-xl mb-4 focus:outline-none focus:border-cyan-400/50 transition"
+          className="mb-4 w-full rounded-2xl border border-[var(--border-soft)] bg-[var(--panel-strong)] p-3 text-white placeholder-[#53718a] transition focus:border-[var(--border-strong)] focus:outline-none"
         />
 
-        <label className="block text-sm font-medium text-[#8aa1b8] mb-2">
+        <label className="mb-2 block text-sm font-medium text-[var(--text-muted)]">
           Suspicious Message
         </label>
         <textarea
@@ -88,13 +89,13 @@ const Hero = () => {
           value={text}
           onChange={(e) => setText(e.target.value)}
           placeholder="Paste the suspicious message here..."
-          className="w-full bg-[#111820] border border-[#1e2a38] text-white placeholder-[#4f657a] p-3 rounded-xl mb-4 focus:outline-none focus:border-cyan-400/50 transition resize-none"
+          className="mb-4 w-full resize-none rounded-2xl border border-[var(--border-soft)] bg-[var(--panel-strong)] p-3 text-white placeholder-[#53718a] transition focus:border-[var(--border-strong)] focus:outline-none"
         />
 
         <button
           onClick={analyze}
           disabled={loading}
-          className="w-full bg-red-500 hover:bg-red-600 disabled:bg-red-900/60 disabled:cursor-not-allowed text-white py-3 rounded-xl font-semibold transition-colors text-base"
+          className="w-full rounded-2xl bg-gradient-to-r from-[var(--warn)] to-[#ff8e69] py-3 text-base font-semibold text-white shadow-[0_10px_30px_rgba(255,112,102,0.35)] transition-all hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-60"
         >
           {loading ? (
             <span className="flex items-center justify-center gap-2">
@@ -124,12 +125,10 @@ const Hero = () => {
           )}
         </button>
 
-        {error && (
-          <p className="text-red-400 text-sm mt-3 font-mono">{error}</p>
-        )}
+        {error && <p className="mono mt-3 text-sm text-red-300">{error}</p>}
       </div>
 
-      <div className="relative mt-12 grid grid-cols-2 md:grid-cols-4 gap-4 w-full max-w-4xl">
+      <div className="relative mt-12 grid w-full max-w-4xl grid-cols-2 gap-4 md:grid-cols-4">
         {[
           { value: "10K+", label: "Scams Detected" },
           { value: "100%", label: "On-Chain Storage" },
@@ -138,10 +137,10 @@ const Hero = () => {
         ].map(({ value, label }) => (
           <div
             key={label}
-            className="rounded-xl border border-[#1e2a38] bg-white/5 px-4 py-4 text-center"
+            className="glass-panel rounded-2xl px-4 py-4 text-center"
           >
             <p className="text-2xl md:text-3xl font-bold text-white">{value}</p>
-            <p className="text-xs md:text-sm text-[#8aa1b8] mt-1">{label}</p>
+            <p className="mt-1 text-xs text-[var(--text-muted)] md:text-sm">{label}</p>
           </div>
         ))}
       </div>

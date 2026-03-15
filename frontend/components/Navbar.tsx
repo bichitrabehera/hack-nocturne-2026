@@ -2,28 +2,38 @@ import React from "react";
 
 const Navbar = () => {
   return (
-    <nav className="fixed top-0 left-0 right-0 z-50 bg-gray-950/80 backdrop-blur-md border-b border-gray-800">
-      <div className="max-w-6xl mx-auto px-6 py-4 flex items-center justify-between">
-        {/* LOGO */}
-        <div className="flex items-center gap-2">
-          <span className="text-xl font-bold text-white tracking-tight">
-            Scam<span className="text-red-400">Shield</span>
+    <nav className="fixed top-0 left-0 right-0 z-50 border-b border-[var(--border-soft)] bg-[rgba(3,14,22,0.74)] backdrop-blur-xl">
+      <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-4 md:px-6">
+        <div className="flex items-center gap-3">
+          <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-strong)] bg-[rgba(61,214,184,0.12)] text-[13px] font-bold text-[var(--accent)] animate-ring">
+            SS
+          </span>
+          <span className="text-lg font-bold tracking-tight text-white md:text-xl">
+            Scam<span className="text-[var(--warn)]">Shield</span>
           </span>
         </div>
 
-        {/* LINKS */}
-        <div className="hidden md:flex items-center gap-8 text-sm text-gray-400">
-          <a href="/dashboard" className="hover:text-white transition-colors">
+        <div className="hidden items-center gap-8 text-sm text-[var(--text-muted)] md:flex">
+          <a href="/dashboard" className="transition-colors hover:text-white">
             Dashboard
           </a>
-          
-          <a href="/sim" className="hover:text-white transition-colors">
+          <a href="/sim" className="transition-colors hover:text-white">
             Analytics
           </a>
-          <a href="https://discord.gg/GqvQPuYp" className="hover:text-white transition-colors">
+          <a
+            href="https://discord.gg/GqvQPuYp"
+            className="rounded-full border border-[var(--border-soft)] bg-[rgba(58,167,255,0.12)] px-4 py-2 font-medium text-[var(--accent-2)] transition-all hover:border-[var(--border-strong)] hover:bg-[rgba(58,167,255,0.2)] hover:text-[#c6e8ff]"
+          >
             Join Discord
           </a>
         </div>
+
+        <a
+          href="/report"
+          className="mono rounded-full border border-[var(--border-strong)] bg-[rgba(255,112,102,0.14)] px-3 py-1.5 text-[11px] font-semibold uppercase tracking-wide text-[#ffc3be] transition-all hover:bg-[rgba(255,112,102,0.26)] md:hidden"
+        >
+          Report Scam
+        </a>
       </div>
     </nav>
   );
