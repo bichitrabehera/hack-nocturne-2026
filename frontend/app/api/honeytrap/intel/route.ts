@@ -1,5 +1,5 @@
 const BACKEND_API_BASE =
-  process.env.BACKEND_API_BASE || "http://hack-nocturne-2026-production.up.railway.app/api";
+  process.env.BACKEND_API_BASE || "https://hack-nocturne-2026-production.up.railway.app/api";
 
 export async function GET(req: Request): Promise<Response> {
   const { search } = new URL(req.url);
@@ -24,7 +24,7 @@ export async function GET(req: Request): Promise<Response> {
     return Response.json(
       {
         detail:
-          "Honeytrap backend is unreachable. Ensure FastAPI is running at http://hack-nocturne-2026-production.up.railway.app.",
+          "Honeytrap backend is unreachable. Ensure FastAPI is running at https://hack-nocturne-2026-production.up.railway.app.",
       },
       { status: 502 },
     );
