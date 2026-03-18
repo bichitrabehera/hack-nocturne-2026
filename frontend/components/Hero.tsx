@@ -139,20 +139,6 @@ const Hero = () => {
 
   return (
     <section className="noise-overlay relative flex flex-1 flex-col items-center justify-center overflow-hidden px-4 pb-24 pt-32 text-center md:px-6">
-      <div
-        className="absolute inset-0 pointer-events-none"
-        style={{
-          backgroundImage:
-            "linear-gradient(rgba(120,180,215,.05) 1px,transparent 1px),linear-gradient(90deg,rgba(120,180,215,.05) 1px,transparent 1px)",
-          backgroundSize: "52px 52px",
-        }}
-      />
-
-      <div className="pointer-events-none absolute inset-0 bg-gradient-to-b from-[rgba(4,16,26,0.66)] via-transparent to-[rgba(3,11,18,0.82)]" />
-
-      <div className="pointer-events-none absolute left-1/2 top-[28%] h-[34rem] w-[34rem] -translate-x-1/2 -translate-y-1/2 rounded-full bg-[rgba(58,167,255,0.16)] blur-3xl" />
-      <div className="pointer-events-none absolute bottom-0 right-[10%] h-72 w-72 rounded-full bg-[rgba(255,112,102,0.16)] blur-3xl" />
-
       <div className="animate-rise mono relative mb-6 inline-flex items-center gap-2 rounded-full border border-[var(--border-strong)] bg-[rgba(58,167,255,0.14)] px-4 py-2 text-sm text-[#a6ddff]">
         <span className="h-2 w-2 rounded-full bg-[#7de1cf] animate-pulse" />
         AI + Blockchain Powered Protection
@@ -172,7 +158,7 @@ const Hero = () => {
         registry nobody can delete.
       </p>
 
-      <div className="glass-panel animate-rise relative w-full max-w-2xl rounded-3xl p-6 text-left shadow-[0_24px_80px_rgba(3,12,19,0.6)]">
+      <div className="glass-panel animate-rise relative w-full max-w-2xl rounded-3xl p-6 text-left shadow-lg">
         <label className="mb-2 block text-sm font-medium text-[var(--text-muted)]">
           Suspicious URL
         </label>

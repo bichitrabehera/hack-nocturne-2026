@@ -656,7 +656,7 @@ function MalwareView({
 // ─── Main ─────────────────────────────────────────────────────────────────────
 
 export default function AttackSimulator() {
-  const API_BASE = "/api";
+  const API_BASE = "https://hack-nocturne-2026-production.up.railway.app/api";
   const [urlInput, setUrlInput] = useState("");
   const [displayUrl, setDisplayUrl] = useState("");
   const [result, setResult] = useState<AnalysisResult | null>(null);
@@ -715,7 +715,7 @@ export default function AttackSimulator() {
     setSim(INITIAL_SIM);
 
     try {
-      const res = await fetch("/api/analyze", {
+      const res = await fetch("https://hack-nocturne-2026-production.up.railway.app/api/analyze", {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

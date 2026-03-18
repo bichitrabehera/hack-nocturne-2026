@@ -1,3 +1,4 @@
+import Link from "next/link";
 import React from "react";
 
 const Navbar = () => {
@@ -5,12 +6,11 @@ const Navbar = () => {
     <nav className="fixed top-0 left-0 right-0 z-50 border-b border-[var(--border-soft)] bg-[rgba(3,14,22,0.74)] backdrop-blur-xl">
       <div className="mx-auto flex w-full max-w-6xl items-center justify-between px-4 py-4 md:px-6">
         <div className="flex items-center gap-3">
-          <span className="inline-flex h-9 w-9 items-center justify-center rounded-lg border border-[var(--border-strong)] bg-[rgba(61,214,184,0.12)] text-[13px] font-bold text-[var(--accent)] animate-ring">
-            SS
-          </span>
-          <span className="text-lg font-bold tracking-tight text-white md:text-xl">
-            Scam<span className="text-[var(--warn)]">Shield</span>
-          </span>
+          <Link href={"/"}>
+            <span className="text-lg font-bold tracking-tight text-white md:text-xl">
+              Scam<span className="text-[var(--warn)]">Shield</span>
+            </span>
+          </Link>
         </div>
 
         <div className="hidden items-center gap-8 text-sm text-[var(--text-muted)] md:flex">
